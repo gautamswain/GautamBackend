@@ -1,62 +1,18 @@
+// GautamKitor/app/build.gradle.kts (App Module)
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.serialization)
+    id("org.jetbrains.kotlin.jvm")
+    application
+    kotlin("plugin.serialization") version "1.9.23"
 }
 
-android {
-    namespace = "com.example.gautamkitor"
-    compileSdk = 37
+group = "com.example"
+version = "1.0.0"
 
-    defaultConfig {
-        applicationId = "com.example.gautamkitor"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    packaging {
-        resources {
-            excludes += setOf(
-                "META-INF/INDEX.LIST",
-                "META-INF/io.netty.versions.properties",
-                "META-INF/license/**",
-                "META-INF/LICENSE*",
-                "META-INF/NOTICE*",
-                "META-INF/native-image/**",
-                "META-INF/*.kotlin_module"
-            )
-        }
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
-    }
+application {
+    mainClass.set("com.example.ApplicationKt")
 }
 
 dependencies {
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.material)
-
     // Ktor Core & Netty Engine
     implementation(libs.ktor.server.core.jvm)
     implementation(libs.ktor.server.netty.jvm)
@@ -68,7 +24,12 @@ dependencies {
     // Logging
     implementation(libs.logback.classic)
 
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
+    // Testing
+    testImplementation(libs.ktor.server.tests.jvm)
+    testImplementation(libs.kotlin.test.junit)
+}
+
+// Custom stage task for cloud hosting
+tasks.register("stage") {
+    dependsOn("installDist")
 }

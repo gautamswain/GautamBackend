@@ -13,22 +13,21 @@ import kotlinx.serialization.Serializable
 data class UserResponse(val status: String, val message: String)
 
 fun main() {
-    embeddedServer(Netty, port = 8080, host = "0.0.0.0", module = Application::module)
+    val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
+    embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
 }
 
 fun Application.module() {
-    // Install JSON serialization
     install(ContentNegotiation) {
         json()
     }
 
-    // Configure routes
     routing {
         get("/") {
-            call.respondText("Welcome to Ktor Backend!")
+            call.respondText("Welcome to Ktor Backend running on Render!")
         }
-        
+
         get("/api/user") {
             call.respond(UserResponse(status = "success", message = "Hello from Ktor Server!"))
         }
