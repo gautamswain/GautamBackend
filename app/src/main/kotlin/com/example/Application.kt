@@ -118,7 +118,7 @@ fun Application.module() {
 
         // Endpoint for fetching reminders parsed from Google Sheets cell A2
         get("/api/reminders") {
-            val rawA2Value = GoogleSheetsBackendService.readCell("Sheet1!A2") ?: "~1#1#3#Maha Ashtami#(19-10-2026-Monday) -> Today~2#2#4#World Statistics Day#(20-10-2026-Tuesday) -> Tomorrow~"
+            val rawA2Value = GoogleSheetsBackendService.readCell("Sheet1!A2") ?: ""
             val reminders = parseRemindersFromRawString(rawA2Value)
             call.respond(reminders)
         }
