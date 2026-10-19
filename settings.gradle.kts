@@ -18,9 +18,11 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
-        mavenCentral()
+        mavenCentral() // 👈 ଏହା ନିଶ୍ଚିତ ଭାବେ ରହିବା ଆବଶ୍ୟକ
     }
 }
 
 rootProject.name = "GautamKitor"
 include(":app")
+
+

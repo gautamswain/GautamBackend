@@ -1,6 +1,5 @@
-// GautamKitor/app/build.gradle.kts (App Module)
 plugins {
-    id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlin.jvm") version "1.9.23"
     application
     kotlin("plugin.serialization") version "1.9.23"
 }
@@ -12,34 +11,49 @@ application {
     mainClass.set("com.example.ApplicationKt")
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+// ❌ DELETE THIS BLOCK FROM HERE:
+// repositories {
+//     google()
+//     mavenCentral()
+// }
+
 dependencies {
     // Ktor Core & Netty Engine
-    implementation(libs.ktor.server.core.jvm)
-    implementation(libs.ktor.server.netty.jvm)
+    implementation("io.ktor:ktor-server-core-jvm:2.3.10")
+    implementation("io.ktor:ktor-server-netty-jvm:2.3.10")
 
     // Content Negotiation & JSON Serialization
-    implementation(libs.ktor.server.content.negotiation.jvm)
-    implementation(libs.ktor.serialization.kotlinx.json.jvm)
+    implementation("io.ktor:ktor-server-content-negotiation-jvm:2.3.10")
+    implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:2.3.10")
 
-    // Logging
-    implementation(libs.logback.classic)
-    implementation("io.ktor:ktor-server-call-logging:2.3.8")
+    // Logging Plugins
+    implementation("io.ktor:ktor-server-call-logging-jvm:2.3.10")
     implementation("ch.qos.logback:logback-classic:1.4.14")
 
-    // Google Sheets API & Authentication
+    // Google Sheets API & OAuth Credentials
     implementation("com.google.api-client:google-api-client:2.2.0")
     implementation("com.google.apis:google-api-services-sheets:v4-rev20220927-2.0.0")
     implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
 
-    // Google GenAI SDK (Gemini AI Integration)
-    implementation("com.google.genai:google-genai-kotlin:1.0.0")
+    // Official Google GenAI SDK
+    implementation("com.google.genai:google-genai:1.0.0")
 
     // Testing
-    testImplementation(libs.ktor.server.tests.jvm)
-    testImplementation(libs.kotlin.test.junit)
+    testImplementation("io.ktor:ktor-server-tests-jvm:2.3.10")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.23")
 }
 
-// Custom stage task for cloud hosting (Render Deployment)
 tasks.register("stage") {
     dependsOn("installDist")
 }
