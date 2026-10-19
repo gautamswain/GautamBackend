@@ -31,6 +31,12 @@ dependencies {
     implementation("com.google.apis:google-api-services-sheets:v4-rev20220927-2.0.0")
     implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
 
+
+    // Ktor Call Logging plugin
+    implementation("io.ktor:ktor-server-call-logging:2.3.8")
+
+    // Logback implementation for SLF4J
+    implementation("ch.qos.logback:logback-classic:1.4.14")
 }
 
 // Custom stage task for cloud hosting
