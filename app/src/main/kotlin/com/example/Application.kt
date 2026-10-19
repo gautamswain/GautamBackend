@@ -120,8 +120,9 @@ fun Application.module() {
         // Endpoint for fetching reminders parsed from Google Sheets cell A2
         get("/api/reminders") {
             val rawA2Value = GoogleSheetsBackendService.readCell("Sheet1!A2") ?: ""
-            val reminders = parseRemindersFromRawString(rawA2Value)
-            call.respond(reminders)
+            //val reminders = parseRemindersFromRawString(rawA2Value)
+            call.respond(rawA2Value)
+            //call.respond(reminders)
         }
 
         // Endpoint for fetching raw moon data string from Google Sheets cell A3
