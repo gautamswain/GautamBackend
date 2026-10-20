@@ -22,8 +22,8 @@ object GeminiService {
         try {
             logger.info("Sending prompt to Gemini: {}", prompt)
             
-            // ✅ Fix: Change from "gemini-1.5-flash" to "gemini-2.5-flash"
-            val response = client!!.models.generateContent("gemini-2.5-flash", prompt, null)
+            // ✅ Fix: Updated to latest recommended model gemini-3.8-flash
+            val response = client!!.models.generateContent("gemini-3.8-flash", prompt, null)
             
             response.text() ?: "No response generated."
         } catch (e: Exception) {
