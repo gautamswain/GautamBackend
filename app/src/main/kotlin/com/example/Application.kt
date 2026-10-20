@@ -64,11 +64,20 @@ fun Application.module() {
         }
 
         get("/api/today-description") {
-            val currentDate = LocalDate.now().toString()
-            val prompt = "Today's date is $currentDate. Briefly describe today's significance according to the Odia calendar (Panjika/Tithi/Festival) in 2 simple sentences in Odia language."
-            val aiDescription = GeminiService.generateText(prompt)
-            call.respond(DayDescriptionResponse(date = currentDate, description = aiDescription))
-        }
+    val currentDate = LocalDate.now().toString()
+    // Read pre-generated description from Google Sheet A4 Cell
+    val descriptionFromSheet = GoogleSheetsBackendService.readCell("Sheet1!A4")
+    
+    val finalDescription = if (!descriptionFromSheet.isNullOrBlank()) {
+        descriptionFromSheet
+    } else {
+        // Fallback to live Gemini API call if sheet cell is empty
+        val prompt = "Today's date is $currentDate. Briefly describe today's significance according to the Odia calendar (Panjika/Tithi/Festival) in 2 simple sentences in Odia language."
+        GeminiService.generateText(prompt)
+    }
+    
+    call.respond(DayDescriptionResponse(date = currentDate, description = finalDescription))
+}
 
         post("/api/add-event") {
             val multipart = call.receiveMultipart()
