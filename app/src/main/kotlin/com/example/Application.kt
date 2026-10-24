@@ -14,6 +14,8 @@ import io.ktor.server.routing.*
 import org.slf4j.event.Level
 import java.time.LocalDate
 
+private const val DEFAULT_COLOR_PALETTE = "0xFFD8BFD8-0xFFE6E6FA-0xFF332F21-0xFFFBFAE2-0xFF80D8FF-0xFF000080-0xFF000080-0xFF8BC34A-0xFF80D8FF-0xFF000080-0xFF000080"
+
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
@@ -33,6 +35,25 @@ fun Application.module() {
     routing {
         get("/") {
             call.respondText("Welcome to Ktor Backend!")
+        }
+
+        // 🚀 NEW/UPGRADED: Fetch Combined Data directly from Sheet1!A15
+        get("/api/combined-data") {
+            try {
+                // Sheet1!A15 Cell ରୁ Full String Read କରାଯାଉଛି
+                val rawA15Data = GoogleSheetsBackendService.readCell("Sheet1!A15")
+
+                val finalResponse = if (!rawA15Data.isNullOrBlank()) {
+                    rawA15Data
+                } else {
+                    // Fallback response: ଯଦି Sheet1!A15 ଖାଲି ଥାଏ
+                    "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
+                }
+
+                call.respondText(finalResponse)
+            } catch (e: Exception) {
+                call.respondText("Error reading Sheet1!A15: ${e.message}", status = HttpStatusCode.InternalServerError)
+            }
         }
 
         get("/api/reminders") {
@@ -64,20 +85,18 @@ fun Application.module() {
         }
 
         get("/api/today-description") {
-    val currentDate = LocalDate.now().toString()
-    // Read pre-generated description from Google Sheet A4 Cell
-    val descriptionFromSheet = GoogleSheetsBackendService.readCell("Sheet1!A4")
-    
-    val finalDescription = if (!descriptionFromSheet.isNullOrBlank()) {
-        descriptionFromSheet
-    } else {
-        // Fallback to live Gemini API call if sheet cell is empty
-        val prompt = "Today's date is $currentDate. Briefly describe today's significance according to the Odia calendar (Panjika/Tithi/Festival) in 2 simple sentences in Odia language."
-        GeminiService.generateText(prompt)
-    }
-    
-    call.respond(DayDescriptionResponse(date = currentDate, description = finalDescription))
-}
+            val currentDate = LocalDate.now().toString()
+            val descriptionFromSheet = GoogleSheetsBackendService.readCell("Sheet1!A4")
+            
+            val finalDescription = if (!descriptionFromSheet.isNullOrBlank()) {
+                descriptionFromSheet
+            } else {
+                val prompt = "Today's date is $currentDate. Briefly describe today's significance according to the Odia calendar (Panjika/Tithi/Festival) in 2 simple sentences in Odia language."
+                GeminiService.generateText(prompt)
+            }
+            
+            call.respond(DayDescriptionResponse(date = currentDate, description = finalDescription))
+        }
 
         post("/api/add-event") {
             val multipart = call.receiveMultipart()

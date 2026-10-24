@@ -1,7 +1,7 @@
 plugins {
-    id("org.jetbrains.kotlin.jvm") version "1.9.23"
+    alias(libs.plugins.kotlin.jvm)
     application
-    kotlin("plugin.serialization") version "1.9.23"
+    alias(libs.plugins.kotlin.serialization)
 }
 
 group = "com.example"
@@ -17,16 +17,10 @@ java {
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-    kotlinOptions {
-        jvmTarget = "17"
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
-
-// ❌ DELETE THIS BLOCK FROM HERE:
-// repositories {
-//     google()
-//     mavenCentral()
-// }
 
 dependencies {
     // Ktor Core & Netty Engine
@@ -55,5 +49,6 @@ dependencies {
 }
 
 tasks.register("stage") {
+    description = "Stages the application distribution."
     dependsOn("installDist")
 }
