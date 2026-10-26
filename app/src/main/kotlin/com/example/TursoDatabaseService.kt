@@ -1,23 +1,24 @@
 package com.example
 
-import com.zaxxer.hikari.HikariConfig
-import com.zaxxer.hikari.HikariDataSource
 import org.slf4j.LoggerFactory
 import java.sql.Connection
+import java.sql.DriverManager
+import java.util.Properties
 
 object TursoDatabaseService {
     private val logger = LoggerFactory.getLogger(TursoDatabaseService::class.java)
-    private var dataSource: HikariDataSource? = null
     var initErrorLog: String = "NOT_STARTED"
         private set
 
+    private var jdbcUrl: String = ""
+    private var authToken: String = ""
+
     fun init() {
-        // Fallback credentials if Render environment variables are empty
         val envUrl = System.getenv("TURSO_DATABASE_URL")?.trim() ?: ""
         val envToken = System.getenv("TURSO_AUTH_TOKEN")?.trim() ?: ""
 
         val rawUrl = if (envUrl.isNotBlank()) envUrl else "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io"
-        val token = if (envToken.isNotBlank()) envToken else "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg"
+        authToken = if (envToken.isNotBlank()) envToken else "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg"
 
         val cleanUrl = rawUrl
             .removePrefix("jdbc:sqlite:")
@@ -28,31 +29,37 @@ object TursoDatabaseService {
             .first()
             .trim()
 
-        try {
-            val hikariConfig = HikariConfig().apply {
-                this.jdbcUrl = "jdbc:dbeaver:libsql:https://$cleanUrl"
-                this.password = token
-                this.driverClassName = "com.dbeaver.jdbc.driver.libsql.LibSqlDriver"
-                this.maximumPoolSize = 5
-                this.isAutoCommit = true
-                this.connectionTimeout = 10000
-            }
+        jdbcUrl = "jdbc:dbeaver:libsql:https://$cleanUrl"
 
-            dataSource = HikariDataSource(hikariConfig)
-            initErrorLog = "CONNECTED"
-            logger.info("Turso database initialized successfully with host: $cleanUrl")
+        try {
+            // Explicitly register DBeaver driver class to avoid null pool initialization
+            Class.forName("com.dbeaver.jdbc.driver.libsql.LibSqlDriver")
+            initErrorLog = "INITIALIZED"
+            logger.info("Turso driver initialized with host: $cleanUrl")
         } catch (e: Exception) {
-            initErrorLog = "Hikari Init Error: ${e.message}"
-            logger.error("Failed to initialize Turso connection: ${e.message}", e)
+            initErrorLog = "Driver Load Error: ${e.message}"
+            logger.error("Failed to load LibSqlDriver: ${e.message}", e)
+        }
+    }
+
+    private fun getConnection(): Connection? {
+        return try {
+            val props = Properties().apply {
+                setProperty("password", authToken)
+                setProperty("user", "")
+            }
+            DriverManager.getConnection(jdbcUrl, props)
+        } catch (e: Exception) {
+            initErrorLog = "Connection Exec Error: ${e.message}"
+            logger.error("Error creating direct Turso connection: ${e.message}", e)
+            null
         }
     }
 
     fun getColumns(): List<String> {
-        val ds = dataSource ?: return listOf("ERROR: dataSource is NULL. Log: $initErrorLog")
+        val conn = getConnection() ?: return listOf("ERROR: Direct Connection is NULL. Log: $initErrorLog")
         val result = mutableListOf<String>()
-        var conn: Connection? = null
         try {
-            conn = ds.connection
             val stmt = conn.createStatement()
             
             val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
@@ -71,19 +78,16 @@ object TursoDatabaseService {
             logger.error("Error fetching columns: ${e.message}", e)
             result.add("EXCEPTION: ${e.message}")
         } finally {
-            conn?.close()
+            try { conn.close() } catch (_: Exception) {}
         }
         return result
     }
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
-        val ds = dataSource ?: return null
+        val conn = getConnection() ?: return null
         val searchId = targetEmpId.trim()
 
-        var conn: Connection? = null
         return try {
-            conn = ds.connection
-
             val query = """
                 SELECT * FROM MasterData 
                 WHERE LOWER(TRIM(coalesce(NULLIF(emp_id_2, ''), NULLIF(emp_id, ''), ''))) = LOWER(?)
@@ -148,7 +152,7 @@ object TursoDatabaseService {
             logger.error("Error executing SQL query for empId $targetEmpId: ${e.message}", e)
             null
         } finally {
-            conn?.close()
+            try { conn.close() } catch (_: Exception) {}
         }
     }
 }
