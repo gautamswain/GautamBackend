@@ -53,24 +53,16 @@ object TursoDatabaseService {
             transaction {
                 var dto: MasterDataDto? = null
 
-                // 1. First, fetch table metadata to discover the exact emp_id column name
-                var empColName: String? = null
-                exec("PRAGMA table_info(MasterData);") { rs ->
-                    while (rs.next()) {
-                        val col = rs.getString("name")
-                        val lowerCol = col.lowercase()
-                        if (lowerCol == "emp_id_2" || lowerCol == "emp_id" || lowerCol.startsWith("emp_id") || lowerCol.contains("empid")) {
-                            empColName = col
-                            break
-                        }
-                    }
-                }
-
-                // Default fallback if PRAGMA doesn't find it
-                val targetColumn = empColName ?: "emp_id_2"
-
-                // 2. Query Turso using the dynamically resolved column name
-                val query = "SELECT * FROM MasterData WHERE TRIM(LOWER(\"$targetColumn\")) = LOWER('$searchId') LIMIT 1;"
+                // Dynamic query checking emp_id_2, emp_id, or any alternative column name
+                val query = """
+                    SELECT * FROM MasterData 
+                    WHERE LOWER(TRIM(coalesce(
+                        NULLIF(emp_id_2, ''), 
+                        NULLIF(emp_id, ''), 
+                        ''
+                    ))) = LOWER('$searchId') 
+                    LIMIT 1;
+                """.trimIndent()
 
                 exec(query) { rs ->
                     if (rs.next()) {
@@ -79,80 +71,89 @@ object TursoDatabaseService {
                         val map = mutableMapOf<String, String>()
 
                         for (i in 1..count) {
-                            val colName = metaData.getColumnName(i).lowercase()
+                            val colName = metaData.getColumnName(i).lowercase().trim()
                             val colValue = rs.getString(i) ?: ""
                             map[colName] = colValue
                         }
 
+                        // Helper to safely extract values across header variants
+                        fun getVal(vararg keys: String): String {
+                            for (key in keys) {
+                                val value = map[key.lowercase()]
+                                if (!value.isNullOrBlank()) return value
+                            }
+                            return ""
+                        }
+
                         dto = MasterDataDto(
-                            id = map["id"] ?: "",
-                            slNo = map["sl_no_1"] ?: map["sl_no"] ?: "",
-                            empId = map["emp_id_2"] ?: map["emp_id"] ?: searchId,
-                            employeeName = map["employee_name_3"] ?: map["employee_name"] ?: "",
-                            fathersName = map["fathers_name_4"] ?: map["fathers_name"] ?: "",
-                            gender = map["gender_5"] ?: map["gender"] ?: "",
-                            dob = map["dob_6"] ?: map["dob"] ?: "",
-                            designation = map["designation_7"] ?: map["designation"] ?: "",
-                            department = map["department_8"] ?: map["department"] ?: "",
-                            branchName = map["branch_name_9"] ?: map["branch_name"] ?: "",
-                            dojInAdhikar = map["doj_in_adhikar_10"] ?: map["doj_in_adhikar"] ?: "",
-                            presentAddress = map["present_address_11"] ?: map["present_address"] ?: "",
-                            permanentAddress = map["permanent_address_12"] ?: map["permanent_address"] ?: "",
-                            highestEducationalQualification = map["highest_educational_qualification_13"] ?: map["highest_educational_qualification"] ?: "",
-                            personalContactNumber = map["personal_contact_number_14"] ?: map["personal_contact_number"] ?: "",
-                            contactNo2 = map["contact_no_2_15"] ?: map["contact_no_2"] ?: "",
-                            aadharCardNo = map["aadhar_card_no_16"] ?: map["aadhar_card_no"] ?: "",
-                            panCardNo = map["pan_card_no_17"] ?: map["pan_card_no"] ?: "",
-                            driving = map["driving_18"] ?: map["driving"] ?: "",
-                            bankName = map["bank_name_19"] ?: map["bank_name"] ?: "",
-                            bankAccountNumber = map["bank_account_number_20"] ?: map["bank_account_number"] ?: "",
-                            ifscCodeBankBranchName = map["ifsc_code_bank_branch_name_21"] ?: map["ifsc_code_bank_branch_name"] ?: "",
-                            esiNo = map["esi_no_22"] ?: map["esi_no"] ?: "",
-                            epfUanNo = map["epf_uan_no_23"] ?: map["epf_uan_no"] ?: "",
-                            uanName = map["uan_name_24"] ?: map["uan_name"] ?: "",
-                            dol = map["dol_25"] ?: map["dol"] ?: "",
-                            companyNameStartingFromCurrentToOld = map["company_name_starting_from_current_to_old_26"] ?: "",
-                            designationbackcompany = map["designationbackcompany_27"] ?: "",
-                            bloodGroup = map["blood_group_28"] ?: map["blood_group"] ?: "",
-                            ff = map["ff_29"] ?: map["ff"] ?: "",
-                            status = map["status_30"] ?: map["status"] ?: "",
-                            interviewed = map["interviewed_31"] ?: map["interviewed"] ?: "",
-                            dateOfResignation = map["date_of_resignation_32"] ?: map["date_of_resignation"] ?: "",
-                            lastWorkingDate = map["last_working_date_33"] ?: map["last_working_date"] ?: "",
-                            typeOfExit = map["type_of_exit_34"] ?: map["type_of_exit"] ?: "",
-                            empStatus = map["emp_status_35"] ?: map["emp_status"] ?: "",
-                            empStatusTemp = map["emp_status_temp_36"] ?: map["emp_status_temp"] ?: "",
-                            slary = map["slary_37"] ?: map["slary"] ?: "",
-                            mastRem = map["mast_rem_38"] ?: map["mast_rem"] ?: "",
-                            hravariable = map["hravariable_39"] ?: map["hravariable"] ?: "",
-                            daaosa = map["daaosa_40"] ?: map["daaosa"] ?: "",
-                            arrearsIncrement = map["arrears_increment_41"] ?: map["arrears_increment"] ?: "",
-                            tds = map["tds_42"] ?: map["tds"] ?: "",
-                            staffLoan = map["staff_loan_43"] ?: map["staff_loan"] ?: "",
-                            staffAdvance = map["staff_advance_44"] ?: map["staff_advance"] ?: "",
-                            others = map["others_45"] ?: map["others"] ?: "",
-                            otherEarnings = map["other_earnings_46"] ?: map["other_earnings"] ?: "",
-                            salaryCode = map["salary_code_47"] ?: map["salary_code"] ?: "",
-                            salH = map["sal_h_48"] ?: map["sal_h"] ?: "",
-                            epf55 = map["epf55_49"] ?: map["epf55"] ?: "",
-                            esi56 = map["esi56_50"] ?: map["esi56"] ?: "",
-                            lender = map["lender_51"] ?: map["lender"] ?: "",
-                            email61Personal = map["email61_personal_52"] ?: map["email61_personal"] ?: "",
-                            offerApp = map["offer_app_53"] ?: map["offer_app"] ?: "",
-                            insurancesbi = map["insurancesbi_54"] ?: map["insurancesbi"] ?: "",
-                            equifax = map["equifax_55"] ?: map["equifax"] ?: "",
-                            exitDate = map["exit_date_56"] ?: map["exit_date"] ?: "",
-                            idphoto68 = map["idphoto68_57"] ?: map["idphoto68"] ?: "",
-                            mailIdOffice = map["mail_id_office_58"] ?: map["mail_id_office"] ?: "",
-                            coment77 = map["coment77_59"] ?: map["coment77"] ?: "",
-                            documentSubmissionDate78 = map["documentsubmissiondate78_60"] ?: ""
+                            id = getVal("id"),
+                            slNo = getVal("sl_no_1", "sl_no", "slno"),
+                            empId = getVal("emp_id_2", "emp_id", "empid", "code").ifEmpty { searchId },
+                            employeeName = getVal("employee_name_3", "employee_name", "name"),
+                            fathersName = getVal("fathers_name_4", "fathers_name"),
+                            gender = getVal("gender_5", "gender"),
+                            dob = getVal("dob_6", "dob"),
+                            designation = getVal("designation_7", "designation"),
+                            department = getVal("department_8", "department"),
+                            branchName = getVal("branch_name_9", "branch_name"),
+                            dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
+                            presentAddress = getVal("present_address_11", "present_address"),
+                            permanentAddress = getVal("permanent_address_12", "permanent_address"),
+                            highestEducationalQualification = getVal("highest_educational_qualification_13", "highest_educational_qualification"),
+                            personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number", "contact_no"),
+                            contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
+                            aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
+                            panCardNo = getVal("pan_card_no_17", "pan_card_no"),
+                            driving = getVal("driving_18", "driving"),
+                            bankName = getVal("bank_name_19", "bank_name"),
+                            bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
+                            ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
+                            esiNo = getVal("esi_no_22", "esi_no"),
+                            epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
+                            uanName = getVal("uan_name_24", "uan_name"),
+                            dol = getVal("dol_25", "dol"),
+                            companyNameStartingFromCurrentToOld = getVal("company_name_starting_from_current_to_old_26"),
+                            designationbackcompany = getVal("designationbackcompany_27"),
+                            bloodGroup = getVal("blood_group_28", "blood_group"),
+                            ff = getVal("ff_29", "ff"),
+                            status = getVal("status_30", "status"),
+                            interviewed = getVal("interviewed_31", "interviewed"),
+                            dateOfResignation = getVal("date_of_resignation_32", "date_of_resignation"),
+                            lastWorkingDate = getVal("last_working_date_33", "last_working_date"),
+                            typeOfExit = getVal("type_of_exit_34", "type_of_exit"),
+                            empStatus = getVal("emp_status_35", "emp_status"),
+                            empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
+                            slary = getVal("slary_37", "slary"),
+                            mastRem = getVal("mast_rem_38", "mast_rem"),
+                            hravariable = getVal("hravariable_39", "hravariable"),
+                            daaosa = getVal("daaosa_40", "daaosa"),
+                            arrearsIncrement = getVal("arrears_increment_41", "arrears_increment"),
+                            tds = getVal("tds_42", "tds"),
+                            staffLoan = getVal("staff_loan_43", "staff_loan"),
+                            staffAdvance = getVal("staff_advance_44", "staff_advance"),
+                            others = getVal("others_45", "others"),
+                            otherEarnings = getVal("other_earnings_46", "other_earnings"),
+                            salaryCode = getVal("salary_code_47", "salary_code"),
+                            salH = getVal("sal_h_48", "sal_h"),
+                            epf55 = getVal("epf55_49", "epf55"),
+                            esi56 = getVal("esi56_50", "esi56"),
+                            lender = getVal("lender_51", "lender"),
+                            email61Personal = getVal("email61_personal_52", "email61_personal"),
+                            offerApp = getVal("offer_app_53", "offer_app"),
+                            insurancesbi = getVal("insurancesbi_54", "insurancesbi"),
+                            equifax = getVal("equifax_55", "equifax"),
+                            exitDate = getVal("exit_date_56", "exit_date"),
+                            idphoto68 = getVal("idphoto68_57", "idphoto68"),
+                            mailIdOffice = getVal("mail_id_office_58", "mail_id_office"),
+                            coment77 = getVal("coment77_59", "coment77"),
+                            documentSubmissionDate78 = getVal("documentsubmissiondate78_60")
                         )
                     }
                 }
                 dto
             }
         } catch (e: Exception) {
-            logger.error("Error querying empId $targetEmpId: ${e.message}", e)
+            logger.error("Error querying empId $targetEmpId:${e.message}", e)
             null
         }
     }
