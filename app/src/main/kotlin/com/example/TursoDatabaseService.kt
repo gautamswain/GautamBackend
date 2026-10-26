@@ -3,26 +3,8 @@ package com.example
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import org.jetbrains.exposed.sql.Database
-import org.jetbrains.exposed.sql.Table
-import org.jetbrains.exposed.sql.lowerCase
-import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
-
-// Explicitly mapping Google Sheet synced column names
-object MasterDataTable : Table("MasterData") {
-    val id = integer("id").autoIncrement()
-    val empId = varchar("Emp. ID", 100) // 👈 Matches exact Google Sheet header
-    val employeeName = varchar("EMPLOYEE NAME", 255) // 👈 Matches exact Google Sheet header
-    val designation = varchar("DESIGNATION", 255) // 👈 Matches exact Google Sheet header
-    val department = varchar("DEPARTMENT", 255)
-    val branchName = varchar("BRANCH NAME", 255)
-    val contactNo = varchar("Personal Contact Number", 100)
-    val panNo = varchar("PAN Card No.", 100)
-    val officeEmail = varchar("Mail ID - Office", 255)
-
-    override val primaryKey = PrimaryKey(id)
-}
 
 object TursoDatabaseService {
     private val logger = LoggerFactory.getLogger(TursoDatabaseService::class.java)
@@ -33,7 +15,7 @@ object TursoDatabaseService {
         val token = System.getenv("TURSO_AUTH_TOKEN") ?: ""
 
         if (rawUrl.isBlank() || token.isBlank()) {
-            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN missing in Render environment variables!")
+            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN is missing in environment variables!")
             return
         }
 
@@ -56,34 +38,55 @@ object TursoDatabaseService {
             val dataSource = HikariDataSource(hikariConfig)
             Database.connect(dataSource)
             isConnected = true
-            logger.info("Turso database successfully initialized.")
+            logger.info("Turso database initialized successfully.")
         } catch (e: Exception) {
-            logger.error("Failed to connect to Turso: ${e.message}", e)
+            logger.error("Failed to initialize Turso database connection: ${e.message}", e)
         }
     }
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         if (!isConnected) return null
 
-        val cleanSearchId = targetEmpId.trim()
+        val searchId = targetEmpId.trim()
 
         return try {
             transaction {
-                MasterDataTable.select { 
-                    MasterDataTable.empId.lowerCase() eq cleanSearchId.lowercase() 
+                // Using raw SQL handles column names with spaces/dots smoothly ("Emp. ID", "EMPLOYEE NAME", "DESIGNATION")
+                val query = """
+                    SELECT * FROM MasterData 
+                    WHERE TRIM(LOWER("Emp. ID")) = LOWER('$searchId') 
+                       OR TRIM(LOWER("emp_id")) = LOWER('$searchId')
+                    LIMIT 1
+                """.trimIndent()
+
+                var resultDto: MasterDataDto? = null
+
+                exec(query) { rs ->
+                    if (rs.next()) {
+                        // Extract with column name fallbacks
+                        val idVal = try { rs.getInt("id") } catch (_: Exception) { 1 }
+                        
+                        val empIdVal = try { rs.getString("Emp. ID") } 
+                                       catch (_: Exception) { rs.getString("emp_id") } ?: searchId
+
+                        val nameVal = try { rs.getString("EMPLOYEE NAME") } 
+                                      catch (_: Exception) { rs.getString("employee_name") } ?: ""
+
+                        val designationVal = try { rs.getString("DESIGNATION") } 
+                                             catch (_: Exception) { rs.getString("designation") } ?: ""
+
+                        resultDto = MasterDataDto(
+                            id = idVal,
+                            empId = empIdVal.trim(),
+                            employeeName = nameVal.trim(),
+                            designation = designationVal.trim()
+                        )
+                    }
                 }
-                .map { row ->
-                    MasterDataDto(
-                        id = row[MasterDataTable.id],
-                        empId = row[MasterDataTable.empId],
-                        employeeName = row[MasterDataTable.employeeName],
-                        designation = row[MasterDataTable.designation]
-                    )
-                }
-                .singleOrNull()
+                resultDto
             }
         } catch (e: Exception) {
-            logger.error("Error querying empId $targetEmpId: ${e.message}", e)
+            logger.error("Error executing query for empId $targetEmpId: ${e.message}", e)
             null
         }
     }
