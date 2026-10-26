@@ -18,12 +18,10 @@ private const val DEFAULT_COLOR_PALETTE = "0xFFD8BFD8-0xFFE6E6FA-0xFF332F21-0xFF
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
-    embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
-        .start(wait = true)
+    embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module).start(wait = true)
 }
 
 fun Application.module() {
-    // 1. Initialize Turso Database Connection Pool
     TursoDatabaseService.init()
 
     install(CallLogging) {
@@ -31,119 +29,74 @@ fun Application.module() {
         filter { call -> call.request.path().startsWith("/") }
     }
 
-    install(ContentNegotiation) {
-        json()
-    }
+    install(ContentNegotiation) { json() }
 
     routing {
-        get("/") {
-            call.respondText("Welcome to Ktor Backend!")
-        }
+        get("/") { call.respondText("Welcome to Ktor Backend!") }
 
-        // 🚀 Turso DB Endpoint: Fetch specific record by Employee ID
-        get("/api/turso/record/{empId}") {
-            val empId = call.parameters["empId"]
-            if (empId.isNullOrBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing empId parameter"))
-                return@get
+        route("/api/turso") {
+            get("/columns") {
+                call.respond(mapOf("columns" to TursoDatabaseService.getColumns()))
             }
-
-            val record = TursoDatabaseService.getRecordByEmpId(empId)
-            if (record != null) {
-                call.respond(record)
-            } else {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Record not found for empId: $empId"))
-            }
-        }
-
-        // Fetch Combined Data directly from Sheet1!A15
-        get("/api/combined-data") {
-            try {
-                val rawA15Data = GoogleSheetsBackendService.readCell("Sheet1!A15")
-
-                val finalResponse = if (!rawA15Data.isNullOrBlank()) {
-                    rawA15Data
+            get("/record/{empId}") {
+                val empId = call.parameters["empId"]
+                if (empId.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing empId parameter"))
                 } else {
-                    "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
+                    TursoDatabaseService.getRecordByEmpId(empId)?.let { call.respond(it) }
+                        ?: call.respond(HttpStatusCode.NotFound, mapOf("error" to "Record not found for empId: $empId"))
                 }
-
-                call.respondText(finalResponse)
-            } catch (e: Exception) {
-                call.respondText("Error reading Sheet1!A15: ${e.message}", status = HttpStatusCode.InternalServerError)
             }
+        }
+
+        get("/api/combined-data") {
+            val rawData = GoogleSheetsBackendService.readCell("Sheet1!A15")
+            val fallback = "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
+            call.respondText(if (!rawData.isNullOrBlank()) rawData else fallback)
         }
 
         get("/api/reminders") {
-            val rawA2Value = GoogleSheetsBackendService.readCell("Sheet1!A2")
-            val reminders = if (!rawA2Value.isNullOrBlank()) {
-                parseRemindersFromRawString(rawA2Value)
-            } else {
-                parseRemindersFromRawString("1#1#3#Maha Ashtami#(19-10-2026-Monday) -> Today~")
-            }
-            call.respond(reminders)
+            val rawData = GoogleSheetsBackendService.readCell("Sheet1!A2") ?: "1#1#3#Maha Ashtami#(19-10-2026-Monday) -> Today~"
+            call.respond(parseRemindersFromRawString(rawData))
         }
 
         get("/api/moon-phase") {
-            val rawA3Value = GoogleSheetsBackendService.readCell("Sheet1!A3")
-                ?: "0~1~2~3~4~5~6~7~8~9~10~11~12~13~14~15~15~15~15~15"
-            call.respond(MoonPhaseResponse(rawMnData = rawA3Value))
+            val rawData = GoogleSheetsBackendService.readCell("Sheet1!A3") ?: "0~1~2~3~4~5~6~7~8~9~10~11~12~13~14~15~15~15~15~15"
+            call.respond(MoonPhaseResponse(rawMnData = rawData))
         }
-
-        get("/api/chat") {
-            val prompt = call.request.queryParameters["prompt"] ?: "Hello Gemini"
-            val aiReply = GeminiService.generateText(prompt)
-            call.respond(GeminiResponse(reply = aiReply))
-        }
-
-        post("/api/chat") {
-            val request = call.receive<GeminiRequest>()
-            val aiReply = GeminiService.generateText(request.prompt)
-            call.respond(GeminiResponse(reply = aiReply))
-        }
-
-get("/api/turso/columns") {
-    val cols = TursoDatabaseService.getColumns()
-    call.respond(mapOf("columns" to cols))
-}
 
         get("/api/today-description") {
-            val currentDate = LocalDate.now().toString()
-            val descriptionFromSheet = GoogleSheetsBackendService.readCell("Sheet1!A4")
-            
-            val finalDescription = if (!descriptionFromSheet.isNullOrBlank()) {
-                descriptionFromSheet
-            } else {
-                val prompt = "Today's date is $currentDate. Briefly describe today's significance according to the Odia calendar (Panjika/Tithi/Festival) in 2 simple sentences in Odia language."
-                GeminiService.generateText(prompt)
+            val date = LocalDate.now().toString()
+            val sheetDesc = GoogleSheetsBackendService.readCell("Sheet1!A4")
+            val desc = if (!sheetDesc.isNullOrBlank()) sheetDesc else GeminiService.generateText("Today's date is $date. Briefly describe today's significance according to the Odia calendar in 2 simple sentences in Odia.")
+            call.respond(DayDescriptionResponse(date = date, description = desc))
+        }
+
+        route("/api/chat") {
+            get {
+                val prompt = call.request.queryParameters["prompt"] ?: "Hello Gemini"
+                call.respond(GeminiResponse(reply = GeminiService.generateText(prompt)))
             }
-            
-            call.respond(DayDescriptionResponse(date = currentDate, description = finalDescription))
+            post {
+                val req = call.receive<GeminiRequest>()
+                call.respond(GeminiResponse(reply = GeminiService.generateText(req.prompt)))
+            }
         }
 
         post("/api/add-event") {
-            val multipart = call.receiveMultipart()
-            var date = ""
-            var event = ""
-            var type = 2
-
-            multipart.forEachPart { part ->
-                when (part) {
-                    is PartData.FormItem -> {
-                        if (part.name == "date") date = part.value
-                        if (part.name == "event") event = part.value
-                        if (part.name == "type") type = part.value.toIntOrNull() ?: 2
+            var date = ""; var event = ""; var type = 2
+            call.receiveMultipart().forEachPart { part ->
+                if (part is PartData.FormItem) {
+                    when (part.name) {
+                        "date" -> date = part.value
+                        "event" -> event = part.value
+                        "type" -> type = part.value.toIntOrNull() ?: 2
                     }
-                    else -> {}
                 }
                 part.dispose()
             }
-
-            val success = GoogleSheetsBackendService.appendEventToSheet(type, date, event)
-            if (success) {
-                call.respond(HttpStatusCode.OK, mapOf("status" to "success"))
-            } else {
-                call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error"))
-            }
+            val status = if (GoogleSheetsBackendService.appendEventToSheet(type, date, event)) HttpStatusCode.OK to "success" else HttpStatusCode.InternalServerError to "error"
+            call.respond(status.first, mapOf("status" to status.second))
         }
     }
 }
