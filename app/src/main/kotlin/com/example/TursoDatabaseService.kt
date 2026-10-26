@@ -53,7 +53,6 @@ object TursoDatabaseService {
             transaction {
                 var dto: MasterDataDto? = null
 
-                // Dynamic query checking emp_id_2, emp_id, or any alternative column name
                 val query = """
                     SELECT * FROM MasterData 
                     WHERE LOWER(TRIM(coalesce(
@@ -76,7 +75,6 @@ object TursoDatabaseService {
                             map[colName] = colValue
                         }
 
-                        // Helper to safely extract values across header variants
                         fun getVal(vararg keys: String): String {
                             for (key in keys) {
                                 val value = map[key.lowercase()]
@@ -153,7 +151,7 @@ object TursoDatabaseService {
                 dto
             }
         } catch (e: Exception) {
-            logger.error("Error querying empId $targetEmpId:${e.message}", e)
+            logger.error("Error querying empId $targetEmpId: ${e.message}", e)
             null
         }
     }
