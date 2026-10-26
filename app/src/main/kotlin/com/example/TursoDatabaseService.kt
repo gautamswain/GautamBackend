@@ -15,7 +15,7 @@ object TursoDatabaseService {
         val token = System.getenv("TURSO_AUTH_TOKEN") ?: ""
 
         if (rawUrl.isBlank() || token.isBlank()) {
-            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN is missing!")
+            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN missing!")
             return
         }
 
@@ -51,15 +51,26 @@ object TursoDatabaseService {
 
         return try {
             transaction {
-                // Supports both emp_id_2 (new schema) and emp_id (legacy schema)
-                val query = """
-                    SELECT * FROM MasterData 
-                    WHERE TRIM(LOWER(emp_id_2)) = LOWER('$searchId') 
-                       OR TRIM(LOWER(emp_id)) = LOWER('$searchId')
-                    LIMIT 1
-                """.trimIndent()
-
                 var dto: MasterDataDto? = null
+
+                // 1. First, fetch table metadata to discover the exact emp_id column name
+                var empColName: String? = null
+                exec("PRAGMA table_info(MasterData);") { rs ->
+                    while (rs.next()) {
+                        val col = rs.getString("name")
+                        val lowerCol = col.lowercase()
+                        if (lowerCol == "emp_id_2" || lowerCol == "emp_id" || lowerCol.startsWith("emp_id") || lowerCol.contains("empid")) {
+                            empColName = col
+                            break
+                        }
+                    }
+                }
+
+                // Default fallback if PRAGMA doesn't find it
+                val targetColumn = empColName ?: "emp_id_2"
+
+                // 2. Query Turso using the dynamically resolved column name
+                val query = "SELECT * FROM MasterData WHERE TRIM(LOWER(\"$targetColumn\")) = LOWER('$searchId') LIMIT 1;"
 
                 exec(query) { rs ->
                     if (rs.next()) {
