@@ -32,7 +32,6 @@ object TursoDatabaseService {
         jdbcUrl = "jdbc:dbeaver:libsql:https://$cleanUrl"
 
         try {
-            // Explicitly register DBeaver driver class to avoid null pool initialization
             Class.forName("com.dbeaver.jdbc.driver.libsql.LibSqlDriver")
             initErrorLog = "INITIALIZED"
             logger.info("Turso driver initialized with host: $cleanUrl")
@@ -61,18 +60,17 @@ object TursoDatabaseService {
         val result = mutableListOf<String>()
         try {
             val stmt = conn.createStatement()
-            
-            val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
-            while (rsTables.next()) {
-                result.add("TABLE: " + rsTables.getString("name"))
+            val rs = stmt.executeQuery("SELECT * FROM MasterData LIMIT 1;")
+            if (rs.next()) {
+                val metaData = rs.metaData
+                val count = metaData.columnCount
+                for (i in 1..count) {
+                    result.add(metaData.getColumnName(i))
+                }
+            } else {
+                result.add("MasterData table is EMPTY")
             }
-            rsTables.close()
-
-            val rsCols = stmt.executeQuery("PRAGMA table_info('MasterData');")
-            while (rsCols.next()) {
-                result.add("COL: " + rsCols.getString("name"))
-            }
-            rsCols.close()
+            rs.close()
             stmt.close()
         } catch (e: Exception) {
             logger.error("Error fetching columns: ${e.message}", e)
@@ -85,24 +83,14 @@ object TursoDatabaseService {
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         val conn = getConnection() ?: return null
-        val searchId = targetEmpId.trim()
+        val searchId = targetEmpId.trim().lowercase()
 
         return try {
-            val query = """
-                SELECT * FROM MasterData 
-                WHERE LOWER(TRIM(coalesce(NULLIF(emp_id_2, ''), NULLIF(emp_id, ''), ''))) = LOWER(?)
-                   OR LOWER(TRIM(coalesce(NULLIF(emp_id_2, ''), NULLIF(emp_id, ''), ''))) LIKE LOWER(?)
-                LIMIT 1
-            """.trimIndent()
-
-            val stmt = conn.prepareStatement(query)
-            stmt.setString(1, searchId)
-            stmt.setString(2, "%$searchId%")
-
-            val rs = stmt.executeQuery()
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT * FROM MasterData;")
             var dto: MasterDataDto? = null
 
-            if (rs.next()) {
+            while (rs.next()) {
                 val metaData = rs.metaData
                 val count = metaData.columnCount
                 val map = mutableMapOf<String, String>()
@@ -121,29 +109,34 @@ object TursoDatabaseService {
                     return ""
                 }
 
-                dto = MasterDataDto(
-                    id = getVal("id"),
-                    slNo = getVal("sl_no_1", "sl_no"),
-                    empId = getVal("emp_id_2", "emp_id", "code").ifEmpty { searchId },
-                    employeeName = getVal("employee_name_3", "employee_name"),
-                    fathersName = getVal("fathers_name_4", "fathers_name"),
-                    gender = getVal("gender_5", "gender"),
-                    dob = getVal("dob_6", "dob"),
-                    designation = getVal("designation_7", "designation"),
-                    department = getVal("department_8", "department"),
-                    branchName = getVal("branch_name_9", "branch_name"),
-                    dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
-                    personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
-                    contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
-                    aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
-                    panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                    bankName = getVal("bank_name_19", "bank_name"),
-                    bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
-                    ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
-                    esiNo = getVal("esi_no_22", "esi_no"),
-                    epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
-                    uanName = getVal("uan_name_24", "uan_name")
-                )
+                val currentEmpId = getVal("emp_id_2", "emp_id", "code").lowercase().trim()
+
+                if (currentEmpId == searchId || currentEmpId.contains(searchId)) {
+                    dto = MasterDataDto(
+                        id = getVal("id"),
+                        slNo = getVal("sl_no_1", "sl_no"),
+                        empId = getVal("emp_id_2", "emp_id", "code").ifEmpty { targetEmpId },
+                        employeeName = getVal("employee_name_3", "employee_name"),
+                        fathersName = getVal("fathers_name_4", "fathers_name"),
+                        gender = getVal("gender_5", "gender"),
+                        dob = getVal("dob_6", "dob"),
+                        designation = getVal("designation_7", "designation"),
+                        department = getVal("department_8", "department"),
+                        branchName = getVal("branch_name_9", "branch_name"),
+                        dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
+                        personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
+                        contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
+                        aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
+                        panCardNo = getVal("pan_card_no_17", "pan_card_no"),
+                        bankName = getVal("bank_name_19", "bank_name"),
+                        bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
+                        ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
+                        esiNo = getVal("esi_no_22", "esi_no"),
+                        epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
+                        uanName = getVal("uan_name_24", "uan_name")
+                    )
+                    break
+                }
             }
             rs.close()
             stmt.close()
