@@ -1,9 +1,20 @@
 package com.example
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.DriverManager
 import java.util.Properties
+
+// Clean Search JSON Response DTO
+@Serializable
+data class SearchResultDto(
+    @SerialName("emp_id_2") val empId: String = "",
+    @SerialName("employee_name_3") val employeeName: String = "",
+    @SerialName("emp_status_35") val empStatus: String = "",
+    @SerialName("emp_status_temp_36") val empStatusTemp: String = ""
+)
 
 object TursoDatabaseService {
     private val logger = LoggerFactory.getLogger(TursoDatabaseService::class.java)
@@ -77,3 +88,167 @@ object TursoDatabaseService {
             stmt.close()
         } catch (e: Exception) {
             logger.error("Error fetching columns: ${e.message}", e)
+            result.add("EXCEPTION: ${e.message}")
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+        return result
+    }
+
+    fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
+        val conn = getConnection() ?: return null
+        val searchId = targetEmpId.trim().lowercase()
+
+        return try {
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT * FROM MasterData;")
+            var dto: MasterDataDto? = null
+
+            while (rs.next()) {
+                val metaData = rs.metaData
+                val count = metaData.columnCount
+                val map = mutableMapOf<String, String>()
+
+                for (i in 1..count) {
+                    val colName = metaData.getColumnName(i).lowercase().trim()
+                    val colValue = rs.getString(i) ?: ""
+                    map[colName] = colValue
+                }
+
+                fun getVal(vararg keys: String): String {
+                    for (key in keys) {
+                        val value = map[key.lowercase()]
+                        if (!value.isNullOrBlank()) return value
+                    }
+                    return ""
+                }
+
+                val currentEmpId = getVal("emp_id_2", "emp_id", "code").lowercase().trim()
+
+                if (currentEmpId == searchId || currentEmpId.contains(searchId)) {
+                    dto = MasterDataDto(
+                        id = getVal("id"),
+                        slNo = getVal("sl_no_1", "sl_no"),
+                        empId = getVal("emp_id_2", "emp_id", "code").ifEmpty { targetEmpId },
+                        employeeName = getVal("employee_name_3", "employee_name"),
+                        fathersName = getVal("fathers_name_4", "fathers_name"),
+                        gender = getVal("gender_5", "gender"),
+                        dob = getVal("dob_6", "dob"),
+                        designation = getVal("designation_7", "designation"),
+                        department = getVal("department_8", "department"),
+                        branchName = getVal("branch_name_9", "branch_name"),
+                        dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
+                        personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
+                        contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
+                        aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
+                        panCardNo = getVal("pan_card_no_17", "pan_card_no"),
+                        bankName = getVal("bank_name_19", "bank_name"),
+                        bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
+                        ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
+                        esiNo = getVal("esi_no_22", "esi_no"),
+                        epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
+                        uanName = getVal("uan_name_24", "uan_name")
+                    )
+                    break
+                }
+            }
+            rs.close()
+            stmt.close()
+            dto
+        } catch (e: Exception) {
+            logger.error("Error executing SQL query for empId $targetEmpId: ${e.message}", e)
+            null
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+
+    // Clean Search API Logic returning strictly 4 fields
+    fun searchRecordsByName(queryName: String): List<SearchResultDto> {
+        val conn = getConnection() ?: return emptyList()
+        
+        val cleanQuery = queryName.trim().lowercase().replace(Regex("\\s+"), " ")
+        val searchTerms = cleanQuery.split(" ").filter { it.isNotBlank() }
+        
+        fun soundKey(text: String): String {
+            val cleaned = text.lowercase().replace(Regex("[^a-z0-9]"), "")
+            if (cleaned.isEmpty()) return ""
+            val firstChar = cleaned.first()
+            val soundBody = cleaned.drop(1)
+                .replace(Regex("[aeiouy]"), "")
+                .replace(Regex("(.)\\1+"), "$1")
+            return "$firstChar$soundBody"
+        }
+
+        val soundTerms = searchTerms.map { soundKey(it) }
+        val resultList = mutableListOf<SearchResultDto>()
+
+        return try {
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT * FROM MasterData;")
+
+            while (rs.next()) {
+                val metaData = rs.metaData
+                val count = metaData.columnCount
+                val map = mutableMapOf<String, String>()
+
+                for (i in 1..count) {
+                    val colName = metaData.getColumnName(i).lowercase().trim()
+                    val colValue = rs.getString(i) ?: ""
+                    map[colName] = colValue
+                }
+
+                fun getVal(vararg keys: String): String {
+                    for (key in keys) {
+                        val value = map[key.lowercase()]
+                        if (!value.isNullOrBlank()) return value
+                    }
+                    return ""
+                }
+
+                val empId = getVal("emp_id_2", "emp_id").lowercase()
+                val empName = getVal("employee_name_3", "employee_name").lowercase()
+                val fatherName = getVal("fathers_name_4", "fathers_name").lowercase()
+                val contact1 = getVal("personal_contact_number_14", "personal_contact_number").lowercase()
+                val contact2 = getVal("contact_no_2_15", "contact_no_2").lowercase()
+
+                val combinedText = "$empId $empName $fatherName $contact1 $contact2"
+                val combinedWords = combinedText.split(Regex("\\s+")).filter { it.isNotBlank() }
+                val combinedSounds = combinedWords.map { soundKey(it) }
+
+                var isMatch = true
+                for (i in searchTerms.indices) {
+                    val term = searchTerms[i]
+                    val sTerm = if (i < soundTerms.size) soundTerms[i] else ""
+
+                    val textMatch = combinedText.contains(term)
+                    val isNumeric = term.all { it.isDigit() }
+                    val soundMatch = !isNumeric && sTerm.length > 1 && combinedSounds.any { it.contains(sTerm) || sTerm.contains(it) }
+
+                    if (!textMatch && !soundMatch) {
+                        isMatch = false
+                        break
+                    }
+                }
+
+                if (isMatch) {
+                    val dto = SearchResultDto(
+                        empId = getVal("emp_id_2", "emp_id"),
+                        employeeName = getVal("employee_name_3", "employee_name"),
+                        empStatus = getVal("emp_status_35", "emp_status"),
+                        empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp")
+                    )
+                    resultList.add(dto)
+                }
+            }
+            rs.close()
+            stmt.close()
+            resultList
+        } catch (e: Exception) {
+            logger.error("Error searching records for $queryName: ${e.message}", e)
+            emptyList()
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+}
