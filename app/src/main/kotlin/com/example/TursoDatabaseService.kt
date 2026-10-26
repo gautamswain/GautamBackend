@@ -8,6 +8,7 @@ import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 
+// Map table schema matching your Turso database structure
 object MasterDataTable : Table("MasterData") {
     val id = integer("id").autoIncrement()
     val empId = varchar("emp_id", 100)
@@ -30,7 +31,12 @@ object TursoDatabaseService {
             return
         }
 
-        val cleanUrl = rawUrl.removePrefix("https://").removePrefix("libsql://")
+        // Clean up URL formatting for DBeaver LibSQL driver
+        val cleanUrl = rawUrl
+            .removePrefix("jdbc:sqlite:")
+            .removePrefix("jdbc:dbeaver:libsql:")
+            .removePrefix("libsql://")
+            .removePrefix("https://")
 
         try {
             val hikariConfig = HikariConfig().apply {
@@ -45,17 +51,18 @@ object TursoDatabaseService {
             val dataSource = HikariDataSource(hikariConfig)
             Database.connect(dataSource)
             isConnected = true
-            logger.info("Turso database successfully initialized!")
+            logger.info("Turso database initialized successfully.")
         } catch (e: Exception) {
-            logger.error("Failed to connect to Turso: ${e.message}", e)
+            logger.error("Failed to initialize Turso connection: ${e.message}", e)
         }
     }
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         if (!isConnected) {
-            logger.error("Turso database is not initialized.")
+            logger.error("Cannot query Turso: Database connection is not initialized.")
             return null
         }
+
         return try {
             transaction {
                 MasterDataTable.select { MasterDataTable.empId eq targetEmpId }
@@ -70,7 +77,7 @@ object TursoDatabaseService {
                     .singleOrNull()
             }
         } catch (e: Exception) {
-            logger.error("Error querying empId $targetEmpId: ${e.message}", e)
+            logger.error("Error querying empId $targetEmpId from Turso: ${e.message}", e)
             null
         }
     }
