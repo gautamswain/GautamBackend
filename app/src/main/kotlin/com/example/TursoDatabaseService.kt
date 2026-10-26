@@ -1,20 +1,9 @@
 package com.example
 
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.DriverManager
 import java.util.Properties
-
-// Clean Search JSON Response DTO
-@Serializable
-data class SearchResultDto(
-    @SerialName("emp_id_2") val empId: String = "",
-    @SerialName("employee_name_3") val employeeName: String = "",
-    @SerialName("emp_status_35") val empStatus: String = "",
-    @SerialName("emp_status_temp_36") val empStatusTemp: String = ""
-)
 
 object TursoDatabaseService {
     private val logger = LoggerFactory.getLogger(TursoDatabaseService::class.java)
@@ -163,8 +152,8 @@ object TursoDatabaseService {
         }
     }
 
-    // Clean Search API Logic returning strictly 4 fields
-    fun searchRecordsByName(queryName: String): List<SearchResultDto> {
+    // Search returning List<Map<String, String>> to guarantee clean key-value pairs
+    fun searchRecordsByName(queryName: String): List<Map<String, String>> {
         val conn = getConnection() ?: return emptyList()
         
         val cleanQuery = queryName.trim().lowercase().replace(Regex("\\s+"), " ")
@@ -181,7 +170,7 @@ object TursoDatabaseService {
         }
 
         val soundTerms = searchTerms.map { soundKey(it) }
-        val resultList = mutableListOf<SearchResultDto>()
+        val resultList = mutableListOf<Map<String, String>>()
 
         return try {
             val stmt = conn.createStatement()
@@ -206,6 +195,7 @@ object TursoDatabaseService {
                     return ""
                 }
 
+                // Strictly Only 5 Search Target Fields
                 val empId = getVal("emp_id_2", "emp_id").lowercase()
                 val empName = getVal("employee_name_3", "employee_name").lowercase()
                 val fatherName = getVal("fathers_name_4", "fathers_name").lowercase()
@@ -232,13 +222,14 @@ object TursoDatabaseService {
                 }
 
                 if (isMatch) {
-                    val dto = SearchResultDto(
-                        empId = getVal("emp_id_2", "emp_id"),
-                        employeeName = getVal("employee_name_3", "employee_name"),
-                        empStatus = getVal("emp_status_35", "emp_status"),
-                        empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp")
+                    // Strictly Return 4 Specified Fields
+                    val cleanRecord = mapOf(
+                        "emp_id_2" to getVal("emp_id_2", "emp_id"),
+                        "employee_name_3" to getVal("employee_name_3", "employee_name"),
+                        "emp_status_35" to getVal("emp_status_35", "emp_status"),
+                        "emp_status_temp_36" to getVal("emp_status_temp_36", "emp_status_temp")
                     )
-                    resultList.add(dto)
+                    resultList.add(cleanRecord)
                 }
             }
             rs.close()
