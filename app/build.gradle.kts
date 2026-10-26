@@ -43,12 +43,20 @@ dependencies {
     // Official Google GenAI SDK
     implementation("com.google.genai:google-genai:1.0.0")
 
+    // 🚀 Public Turso/LibSQL JDBC Driver from Maven Central (No 401 Auth Error)
+    implementation("com.dbeaver.jdbc:com.dbeaver.jdbc.driver.libsql:1.0.4")
+
+    // HikariCP & JetBrains Exposed ORM
+    implementation("com.zaxxer:HikariCP:5.1.0")
+    implementation("org.jetbrains.exposed:exposed-core:0.50.0")
+    implementation("org.jetbrains.exposed:exposed-jdbc:0.50.0")
+
     // Testing
     testImplementation("io.ktor:ktor-server-tests-jvm:2.3.10")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.23")
 }
 
 tasks.register("stage") {
-    description = "Stages the application distribution."
+    description = "Stages the application distribution for Render deployment."
     dependsOn("installDist")
 }

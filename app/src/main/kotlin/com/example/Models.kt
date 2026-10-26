@@ -32,3 +32,11 @@ data class DayDescriptionResponse(
     val date: String,
     val description: String
 )
+
+@Serializable
+data class MasterDataDto(
+    val id: Int = 0,
+    val empId: String,
+    val employeeName: String,
+    val designation: String
+)
