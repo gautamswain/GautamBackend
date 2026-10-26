@@ -46,32 +46,41 @@ object TursoDatabaseService {
 
     // Get all database tables and column details safely
     fun getColumns(): List<String> {
-        val ds = dataSource ?: return emptyList()
-        val result = mutableListOf<String>()
-        var conn: Connection? = null
-        try {
-            conn = ds.connection
-            val stmt = conn.createStatement()
-            
-            val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
-            while (rsTables.next()) {
-                result.add("TABLE: " + rsTables.getString("name"))
-            }
-            rsTables.close()
-
-            val rsCols = stmt.executeQuery("PRAGMA table_info('MasterData');")
-            while (rsCols.next()) {
-                result.add("COL: " + rsCols.getString("name"))
-            }
-            rsCols.close()
-            stmt.close()
-        } catch (e: Exception) {
-            logger.error("Error fetching columns: ${e.message}", e)
-        } finally {
-            conn?.close()
+    val ds = dataSource ?: return listOf("ERROR: dataSource is NULL. Check TURSO_DATABASE_URL & TURSO_AUTH_TOKEN in Render.")
+    val result = mutableListOf<String>()
+    var conn: Connection? = null
+    try {
+        conn = ds.connection
+        val stmt = conn.createStatement()
+        
+        // 1. Fetch table names from SQLite metadata
+        val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
+        var tableCount = 0
+        while (rsTables.next()) {
+            tableCount++
+            result.add("TABLE: " + rsTables.getString("name"))
         }
-        return result
+        rsTables.close()
+
+        if (tableCount == 0) {
+            result.add("WARNING: Connected to DB, but 0 tables found in database!")
+        }
+
+        // 2. Fetch column names of MasterData
+        val rsCols = stmt.executeQuery("PRAGMA table_info('MasterData');")
+        while (rsCols.next()) {
+            result.add("COL: " + rsCols.getString("name"))
+        }
+        rsCols.close()
+        stmt.close()
+    } catch (e: Exception) {
+        logger.error("Error fetching columns: ${e.message}", e)
+        result.add("EXCEPTION: ${e.message}")
+    } finally {
+        conn?.close()
     }
+    return result
+}
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         val ds = dataSource ?: return null
