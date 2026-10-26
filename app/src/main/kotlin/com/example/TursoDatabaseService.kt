@@ -60,17 +60,20 @@ object TursoDatabaseService {
         val result = mutableListOf<String>()
         try {
             val stmt = conn.createStatement()
-            val rs = stmt.executeQuery("SELECT * FROM MasterData LIMIT 1;")
-            if (rs.next()) {
-                val metaData = rs.metaData
-                val count = metaData.columnCount
-                for (i in 1..count) {
-                    result.add(metaData.getColumnName(i))
-                }
-            } else {
-                result.add("MasterData table is EMPTY")
+            val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
+            while (rsTables.next()) {
+                result.add("TABLE: " + rsTables.getString("name"))
             }
-            rs.close()
+            rsTables.close()
+
+            val rsCols = stmt.executeQuery("SELECT * FROM MasterData LIMIT 1;")
+            if (rsCols.next()) {
+                val metaData = rsCols.metaData
+                for (i in 1..metaData.columnCount) {
+                    result.add("COL: " + metaData.getColumnName(i))
+                }
+            }
+            rsCols.close()
             stmt.close()
         } catch (e: Exception) {
             logger.error("Error fetching columns: ${e.message}", e)
@@ -81,6 +84,7 @@ object TursoDatabaseService {
         return result
     }
 
+    // 1. Emp ID ଦ୍ୱାରା Single Record Search
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         val conn = getConnection() ?: return null
         val searchId = targetEmpId.trim().lowercase()
@@ -116,36 +120,4 @@ object TursoDatabaseService {
                         id = getVal("id"),
                         slNo = getVal("sl_no_1", "sl_no"),
                         empId = getVal("emp_id_2", "emp_id", "code").ifEmpty { targetEmpId },
-                        employeeName = getVal("employee_name_3", "employee_name"),
-                        fathersName = getVal("fathers_name_4", "fathers_name"),
-                        gender = getVal("gender_5", "gender"),
-                        dob = getVal("dob_6", "dob"),
-                        designation = getVal("designation_7", "designation"),
-                        department = getVal("department_8", "department"),
-                        branchName = getVal("branch_name_9", "branch_name"),
-                        dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
-                        personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
-                        contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
-                        aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
-                        panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                        bankName = getVal("bank_name_19", "bank_name"),
-                        bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
-                        ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
-                        esiNo = getVal("esi_no_22", "esi_no"),
-                        epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
-                        uanName = getVal("uan_name_24", "uan_name")
-                    )
-                    break
-                }
-            }
-            rs.close()
-            stmt.close()
-            dto
-        } catch (e: Exception) {
-            logger.error("Error executing SQL query for empId $targetEmpId: ${e.message}", e)
-            null
-        } finally {
-            try { conn.close() } catch (_: Exception) {}
-        }
-    }
-}
+                        employeeName = getVal
