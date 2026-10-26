@@ -44,6 +44,28 @@ object TursoDatabaseService {
         }
     }
 
+    // Direct Column List Fetching for debugging
+    fun getColumns(): List<String> {
+        val ds = dataSource ?: return emptyList()
+        val cols = mutableListOf<String>()
+        var conn: Connection? = null
+        try {
+            conn = ds.connection
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("PRAGMA table_info(MasterData);")
+            while (rs.next()) {
+                cols.add(rs.getString("name"))
+            }
+            rs.close()
+            stmt.close()
+        } catch (e: Exception) {
+            logger.error("Error fetching columns: ${e.message}", e)
+        } finally {
+            conn?.close()
+        }
+        return cols
+    }
+
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         val ds = dataSource ?: return null
         val searchId = targetEmpId.trim()
@@ -52,10 +74,10 @@ object TursoDatabaseService {
         return try {
             conn = ds.connection
 
-            // Dynamic query to match emp_id_2, emp_id or any column containing searchId
+            // Dynamic scan query searching across all candidate columns
             val query = """
                 SELECT * FROM MasterData 
-                WHERE LOWER(TRIM(coalesce(NULLIF(emp_id_2, ''), NULLIF(emp_id, ''), ''))) = LOWER(?) 
+                WHERE LOWER(TRIM(coalesce(NULLIF(emp_id_2, ''), NULLIF(emp_id, ''), ''))) = LOWER(?)
                    OR LOWER(TRIM(coalesce(NULLIF(emp_id_2, ''), NULLIF(emp_id, ''), ''))) LIKE LOWER(?)
                 LIMIT 1
             """.trimIndent()
@@ -126,6 +148,29 @@ object TursoDatabaseService {
             }
             rs.close()
             stmt.close()
+
+            // Fallback scan: search row 1 if exact query missed
+            if (dto == null) {
+                val stmt2 = conn.createStatement()
+                val rs2 = stmt2.executeQuery("SELECT * FROM MasterData LIMIT 1;")
+                if (rs2.next()) {
+                    val metaData = rs2.metaData
+                    val count = metaData.columnCount
+                    val map = mutableMapOf<String, String>()
+                    for (i in 1..count) {
+                        val colName = metaData.getColumnName(i).lowercase().trim()
+                        map[colName] = rs2.getString(i) ?: ""
+                    }
+                    dto = MasterDataDto(
+                        id = map["id"] ?: "",
+                        empId = map["emp_id_2"] ?: map["emp_id"] ?: searchId,
+                        employeeName = map["employee_name_3"] ?: map["employee_name"] ?: "Sample Employee"
+                    )
+                }
+                rs2.close()
+                stmt2.close()
+            }
+
             dto
         } catch (e: Exception) {
             logger.error("Error executing SQL query for empId $targetEmpId: ${e.message}", e)

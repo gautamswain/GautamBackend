@@ -101,6 +101,11 @@ fun Application.module() {
             call.respond(GeminiResponse(reply = aiReply))
         }
 
+get("/api/turso/columns") {
+    val cols = TursoDatabaseService.getColumns()
+    call.respond(mapOf("columns" to cols))
+}
+
         get("/api/today-description") {
             val currentDate = LocalDate.now().toString()
             val descriptionFromSheet = GoogleSheetsBackendService.readCell("Sheet1!A4")
