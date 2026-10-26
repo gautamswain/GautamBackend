@@ -4,16 +4,22 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.Table
+import org.jetbrains.exposed.sql.lowerCase
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 
-// Map table schema matching your Turso database structure
+// Explicitly mapping Google Sheet synced column names
 object MasterDataTable : Table("MasterData") {
     val id = integer("id").autoIncrement()
-    val empId = varchar("emp_id", 100)
-    val employeeName = varchar("employee_name", 255)
-    val designation = varchar("designation", 255)
+    val empId = varchar("Emp. ID", 100) // 👈 Matches exact Google Sheet header
+    val employeeName = varchar("EMPLOYEE NAME", 255) // 👈 Matches exact Google Sheet header
+    val designation = varchar("DESIGNATION", 255) // 👈 Matches exact Google Sheet header
+    val department = varchar("DEPARTMENT", 255)
+    val branchName = varchar("BRANCH NAME", 255)
+    val contactNo = varchar("Personal Contact Number", 100)
+    val panNo = varchar("PAN Card No.", 100)
+    val officeEmail = varchar("Mail ID - Office", 255)
 
     override val primaryKey = PrimaryKey(id)
 }
@@ -27,11 +33,10 @@ object TursoDatabaseService {
         val token = System.getenv("TURSO_AUTH_TOKEN") ?: ""
 
         if (rawUrl.isBlank() || token.isBlank()) {
-            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN is missing in Render environment variables!")
+            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN missing in Render environment variables!")
             return
         }
 
-        // Clean up URL formatting for DBeaver LibSQL driver
         val cleanUrl = rawUrl
             .removePrefix("jdbc:sqlite:")
             .removePrefix("jdbc:dbeaver:libsql:")
@@ -51,33 +56,34 @@ object TursoDatabaseService {
             val dataSource = HikariDataSource(hikariConfig)
             Database.connect(dataSource)
             isConnected = true
-            logger.info("Turso database initialized successfully.")
+            logger.info("Turso database successfully initialized.")
         } catch (e: Exception) {
-            logger.error("Failed to initialize Turso connection: ${e.message}", e)
+            logger.error("Failed to connect to Turso: ${e.message}", e)
         }
     }
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
-        if (!isConnected) {
-            logger.error("Cannot query Turso: Database connection is not initialized.")
-            return null
-        }
+        if (!isConnected) return null
+
+        val cleanSearchId = targetEmpId.trim()
 
         return try {
             transaction {
-                MasterDataTable.select { MasterDataTable.empId eq targetEmpId }
-                    .map { row ->
-                        MasterDataDto(
-                            id = row[MasterDataTable.id],
-                            empId = row[MasterDataTable.empId],
-                            employeeName = row[MasterDataTable.employeeName],
-                            designation = row[MasterDataTable.designation]
-                        )
-                    }
-                    .singleOrNull()
+                MasterDataTable.select { 
+                    MasterDataTable.empId.lowerCase() eq cleanSearchId.lowercase() 
+                }
+                .map { row ->
+                    MasterDataDto(
+                        id = row[MasterDataTable.id],
+                        empId = row[MasterDataTable.empId],
+                        employeeName = row[MasterDataTable.employeeName],
+                        designation = row[MasterDataTable.designation]
+                    )
+                }
+                .singleOrNull()
             }
         } catch (e: Exception) {
-            logger.error("Error querying empId $targetEmpId from Turso: ${e.message}", e)
+            logger.error("Error querying empId $targetEmpId: ${e.message}", e)
             null
         }
     }
