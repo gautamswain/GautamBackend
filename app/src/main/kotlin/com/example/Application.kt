@@ -34,6 +34,7 @@ fun Application.module() {
     routing {
         get("/") { call.respondText("Welcome to Ktor Backend!") }
 
+        // Turso Database Endpoints
         route("/api/turso") {
             get("/columns") {
                 call.respond(mapOf("columns" to TursoDatabaseService.getColumns()))
@@ -47,8 +48,18 @@ fun Application.module() {
                         ?: call.respond(HttpStatusCode.NotFound, mapOf("error" to "Record not found for empId: $empId"))
                 }
             }
+            get("/search") {
+                val query = call.request.queryParameters["name"]
+                if (query.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing name parameter"))
+                } else {
+                    val records = TursoDatabaseService.searchRecordsByName(query)
+                    call.respond(records)
+                }
+            }
         }
 
+        // Google Sheets Endpoints
         get("/api/combined-data") {
             val rawData = GoogleSheetsBackendService.readCell("Sheet1!A15")
             val fallback = "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
@@ -72,6 +83,7 @@ fun Application.module() {
             call.respond(DayDescriptionResponse(date = date, description = desc))
         }
 
+        // Gemini AI Endpoints
         route("/api/chat") {
             get {
                 val prompt = call.request.queryParameters["prompt"] ?: "Hello Gemini"
@@ -83,6 +95,7 @@ fun Application.module() {
             }
         }
 
+        // Add Event Endpoint
         post("/api/add-event") {
             var date = ""; var event = ""; var type = 2
             call.receiveMultipart().forEachPart { part ->
