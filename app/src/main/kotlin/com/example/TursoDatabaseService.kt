@@ -84,6 +84,7 @@ object TursoDatabaseService {
         return result
     }
 
+    // 1. Direct Employee ID Search (Single Full Record Return)
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         val conn = getConnection() ?: return null
         val searchId = targetEmpId.trim().lowercase()
@@ -152,6 +153,7 @@ object TursoDatabaseService {
         }
     }
 
+    // 2. Multi-word & Soundex Search across 5 Target Fields (Returns 4 Selected Response Fields ONLY)
     fun searchRecordsByName(queryName: String): List<MasterDataDto> {
         val conn = getConnection() ?: return emptyList()
         
@@ -194,6 +196,7 @@ object TursoDatabaseService {
                     return ""
                 }
 
+                // Strictly Only 5 Target Search Fields
                 val empId = getVal("emp_id_2", "emp_id").lowercase()
                 val empName = getVal("employee_name_3", "employee_name").lowercase()
                 val fatherName = getVal("fathers_name_4", "fathers_name").lowercase()
@@ -210,7 +213,8 @@ object TursoDatabaseService {
                     val sTerm = if (i < soundTerms.size) soundTerms[i] else ""
 
                     val textMatch = combinedText.contains(term)
-                    val soundMatch = sTerm.isNotEmpty() && combinedSounds.any { it.contains(sTerm) || sTerm.contains(it) }
+                    val isNumeric = term.all { it.isDigit() }
+                    val soundMatch = !isNumeric && sTerm.length > 1 && combinedSounds.any { it.contains(sTerm) || sTerm.contains(it) }
 
                     if (!textMatch && !soundMatch) {
                         isMatch = false
@@ -219,28 +223,12 @@ object TursoDatabaseService {
                 }
 
                 if (isMatch) {
+                    // Strictly Requested 4 Selected Response Fields
                     val dto = MasterDataDto(
-                        id = getVal("id"),
-                        slNo = getVal("sl_no_1", "sl_no"),
-                        empId = getVal("emp_id_2", "emp_id", "code"),
+                        empId = getVal("emp_id_2", "emp_id"),
                         employeeName = getVal("employee_name_3", "employee_name"),
-                        fathersName = getVal("fathers_name_4", "fathers_name"),
-                        gender = getVal("gender_5", "gender"),
-                        dob = getVal("dob_6", "dob"),
-                        designation = getVal("designation_7", "designation"),
-                        department = getVal("department_8", "department"),
-                        branchName = getVal("branch_name_9", "branch_name"),
-                        dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
-                        personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
-                        contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
-                        aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
-                        panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                        bankName = getVal("bank_name_19", "bank_name"),
-                        bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
-                        ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
-                        esiNo = getVal("esi_no_22", "esi_no"),
-                        epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
-                        uanName = getVal("uan_name_24", "uan_name")
+                        empStatus = getVal("emp_status_35", "emp_status"),
+                        empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp")
                     )
                     resultList.add(dto)
                 }
