@@ -8,23 +8,25 @@ import java.sql.Connection
 object TursoDatabaseService {
     private val logger = LoggerFactory.getLogger(TursoDatabaseService::class.java)
     private var dataSource: HikariDataSource? = null
-    var isConnected = false
+    var initErrorLog: String = "NOT_STARTED"
         private set
 
     fun init() {
-        val rawUrl = System.getenv("TURSO_DATABASE_URL") ?: ""
-        val token = System.getenv("TURSO_AUTH_TOKEN") ?: ""
+        // Fallback credentials if Render environment variables are empty
+        val envUrl = System.getenv("TURSO_DATABASE_URL")?.trim() ?: ""
+        val envToken = System.getenv("TURSO_AUTH_TOKEN")?.trim() ?: ""
 
-        if (rawUrl.isBlank() || token.isBlank()) {
-            logger.warn("TURSO_DATABASE_URL or TURSO_AUTH_TOKEN missing!")
-            return
-        }
+        val rawUrl = if (envUrl.isNotBlank()) envUrl else "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io"
+        val token = if (envToken.isNotBlank()) envToken else "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg"
 
         val cleanUrl = rawUrl
             .removePrefix("jdbc:sqlite:")
             .removePrefix("jdbc:dbeaver:libsql:")
             .removePrefix("libsql://")
             .removePrefix("https://")
+            .split("]")
+            .first()
+            .trim()
 
         try {
             val hikariConfig = HikariConfig().apply {
@@ -37,50 +39,42 @@ object TursoDatabaseService {
             }
 
             dataSource = HikariDataSource(hikariConfig)
-            isConnected = true
-            logger.info("Turso database initialized successfully.")
+            initErrorLog = "CONNECTED"
+            logger.info("Turso database initialized successfully with host: $cleanUrl")
         } catch (e: Exception) {
+            initErrorLog = "Hikari Init Error: ${e.message}"
             logger.error("Failed to initialize Turso connection: ${e.message}", e)
         }
     }
 
-    // Get all database tables and column details safely
     fun getColumns(): List<String> {
-    val ds = dataSource ?: return listOf("ERROR: dataSource is NULL. Check TURSO_DATABASE_URL & TURSO_AUTH_TOKEN in Render.")
-    val result = mutableListOf<String>()
-    var conn: Connection? = null
-    try {
-        conn = ds.connection
-        val stmt = conn.createStatement()
-        
-        // 1. Fetch table names from SQLite metadata
-        val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
-        var tableCount = 0
-        while (rsTables.next()) {
-            tableCount++
-            result.add("TABLE: " + rsTables.getString("name"))
-        }
-        rsTables.close()
+        val ds = dataSource ?: return listOf("ERROR: dataSource is NULL. Log: $initErrorLog")
+        val result = mutableListOf<String>()
+        var conn: Connection? = null
+        try {
+            conn = ds.connection
+            val stmt = conn.createStatement()
+            
+            val rsTables = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table';")
+            while (rsTables.next()) {
+                result.add("TABLE: " + rsTables.getString("name"))
+            }
+            rsTables.close()
 
-        if (tableCount == 0) {
-            result.add("WARNING: Connected to DB, but 0 tables found in database!")
+            val rsCols = stmt.executeQuery("PRAGMA table_info('MasterData');")
+            while (rsCols.next()) {
+                result.add("COL: " + rsCols.getString("name"))
+            }
+            rsCols.close()
+            stmt.close()
+        } catch (e: Exception) {
+            logger.error("Error fetching columns: ${e.message}", e)
+            result.add("EXCEPTION: ${e.message}")
+        } finally {
+            conn?.close()
         }
-
-        // 2. Fetch column names of MasterData
-        val rsCols = stmt.executeQuery("PRAGMA table_info('MasterData');")
-        while (rsCols.next()) {
-            result.add("COL: " + rsCols.getString("name"))
-        }
-        rsCols.close()
-        stmt.close()
-    } catch (e: Exception) {
-        logger.error("Error fetching columns: ${e.message}", e)
-        result.add("EXCEPTION: ${e.message}")
-    } finally {
-        conn?.close()
+        return result
     }
-    return result
-}
 
     fun getRecordByEmpId(targetEmpId: String): MasterDataDto? {
         val ds = dataSource ?: return null
@@ -135,30 +129,16 @@ object TursoDatabaseService {
                     department = getVal("department_8", "department"),
                     branchName = getVal("branch_name_9", "branch_name"),
                     dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
-                    presentAddress = getVal("present_address_11", "present_address"),
-                    permanentAddress = getVal("permanent_address_12", "permanent_address"),
-                    highestEducationalQualification = getVal("highest_educational_qualification_13", "highest_educational_qualification"),
                     personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
                     contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
                     aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
                     panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                    driving = getVal("driving_18", "driving"),
                     bankName = getVal("bank_name_19", "bank_name"),
                     bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
                     ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
                     esiNo = getVal("esi_no_22", "esi_no"),
                     epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
-                    uanName = getVal("uan_name_24", "uan_name"),
-                    companyNameStartingFromCurrentToOld = getVal("company_name_starting_from_current_to_old_26"),
-                    status = getVal("status_30", "status"),
-                    empStatus = getVal("emp_status_35", "emp_status"),
-                    salaryCode = getVal("salary_code_47", "salary_code"),
-                    lender = getVal("lender_51", "lender"),
-                    email61Personal = getVal("email61_personal_52", "email61_personal"),
-                    offerApp = getVal("offer_app_53", "offer_app"),
-                    insurancesbi = getVal("insurancesbi_54", "insurancesbi"),
-                    equifax = getVal("equifax_55", "equifax"),
-                    mailIdOffice = getVal("mail_id_office_58", "mail_id_office")
+                    uanName = getVal("uan_name_24", "uan_name")
                 )
             }
             rs.close()
