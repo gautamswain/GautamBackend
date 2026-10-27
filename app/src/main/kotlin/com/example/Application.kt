@@ -22,6 +22,7 @@ fun main() {
 }
 
 fun Application.module() {
+    // 1. Initialize Turso Database Connection
     TursoDatabaseService.init()
 
     install(CallLogging) {
@@ -29,16 +30,24 @@ fun Application.module() {
         filter { call -> call.request.path().startsWith("/") }
     }
 
-    install(ContentNegotiation) { json() }
+    install(ContentNegotiation) { 
+        json() 
+    }
 
     routing {
-        get("/") { call.respondText("Welcome to Ktor Backend!") }
+        get("/") { 
+            call.respondText("Welcome to Ktor Backend!") 
+        }
 
-        // Turso DB Routes
+        // 2. Turso DB Routes
         route("/api/turso") {
+            
+            // Get columns info
             get("/columns") {
                 call.respond(mapOf("columns" to TursoDatabaseService.getColumns()))
             }
+
+            // Get exact single record by Emp ID
             get("/record/{empId}") {
                 val empId = call.parameters["empId"]
                 if (empId.isNullOrBlank()) {
@@ -48,18 +57,20 @@ fun Application.module() {
                         ?: call.respond(HttpStatusCode.NotFound, mapOf("error" to "Record not found for empId: $empId"))
                 }
             }
+
+            // Updated Multi-Term Search (Name + Code + PhoneNo + PhoneNo2 + Branch + Designation)
             get("/search") {
-                val query = call.request.queryParameters["name"]
+                val query = call.request.queryParameters["name"] ?: call.request.queryParameters["query"]
                 if (query.isNullOrBlank()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing name parameter"))
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing search parameter"))
                 } else {
-                    val records = TursoDatabaseService.searchRecordsByName(query)
+                    val records = TursoDatabaseService.searchRecords(query)
                     call.respond(records)
                 }
             }
         }
 
-        // Google Sheets Data Routes
+        // 3. Google Sheets Data Routes
         get("/api/combined-data") {
             val rawData = GoogleSheetsBackendService.readCell("Sheet1!A15")
             val fallback = "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
@@ -83,7 +94,7 @@ fun Application.module() {
             call.respond(DayDescriptionResponse(date = date, description = desc))
         }
 
-        // Gemini AI Routes
+        // 4. Gemini AI Chat Routes
         route("/api/chat") {
             get {
                 val prompt = call.request.queryParameters["prompt"] ?: "Hello Gemini"
@@ -95,7 +106,7 @@ fun Application.module() {
             }
         }
 
-        // Add Event Route
+        // 5. Add Event Route
         post("/api/add-event") {
             var date = ""; var event = ""; var type = 2
             call.receiveMultipart().forEachPart { part ->
@@ -108,7 +119,11 @@ fun Application.module() {
                 }
                 part.dispose()
             }
-            val status = if (GoogleSheetsBackendService.appendEventToSheet(type, date, event)) HttpStatusCode.OK to "success" else HttpStatusCode.InternalServerError to "error"
+            val status = if (GoogleSheetsBackendService.appendEventToSheet(type, date, event)) {
+                HttpStatusCode.OK to "success"
+            } else {
+                HttpStatusCode.InternalServerError to "error"
+            }
             call.respond(status.first, mapOf("status" to status.second))
         }
     }
