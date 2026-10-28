@@ -135,7 +135,7 @@ object TursoDatabaseService {
                 val branch = getVal("branch_name_9", "branch_name", "branch").lowercase()
                 val designation = getVal("designation_7", "designation").lowercase()
 
-                val searchableText = "$empId$empName $phone1$phone2 $branch$designation"
+                val searchableText = "$empId $empName $phone1 $phone2 $branch $designation"
 
                 var isMatch = true
                 if (searchTerms.isNotEmpty()) {
@@ -167,4 +167,255 @@ object TursoDatabaseService {
                         contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
                         aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
                         panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                        bankName = getVal("bank
+                        bankName = getVal("bank_name_19", "bank_name", "bank"),
+                        bankAccountNumber = getVal("bank_account_number_20", "bank_account_number", "ac_no"),
+                        ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name", "ifsc"),
+                        esiNo = getVal("esi_no_22", "esi_no", "esic"),
+                        epfUanNo = getVal("epf_uan_no_23", "epf_uan_no", "epf"),
+                        uanName = getVal("uan_name_24", "uan_name")
+                    )
+                    resultList.add(dto)
+                }
+            }
+            rs.close()
+            stmt.close()
+            resultList
+        } catch (e: Exception) {
+            logger.error("Error searching records for query '$query': ${e.message}", e)
+            emptyList()
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+
+    fun getActiveStaffByBranch(branchQuery: String): List<MasterDataDto> {
+        if (branchQuery.isBlank()) return emptyList()
+        val allRecords = searchRecords("") 
+        return allRecords.filter { dto ->
+            val isActive = calculateStatusScore(dto) == 3
+            val isBranchMatch = dto.branchName.trim().lowercase().contains(branchQuery.lowercase())
+            isActive && isBranchMatch
+        }
+    }
+
+    fun getActiveStaffByDesignation(desgQuery: String): List<MasterDataDto> {
+        if (desgQuery.isBlank()) return emptyList()
+        val allRecords = searchRecords("") 
+        return allRecords.filter { dto ->
+            val isActive = calculateStatusScore(dto) == 3
+            val isDesgMatch = dto.designation.trim().lowercase().contains(desgQuery.lowercase())
+            isActive && isDesgMatch
+        }
+    }
+
+    fun getLast20Records(): List<MasterDataDto> {
+        val conn = getConnection() ?: return emptyList()
+        val resultList = mutableListOf<MasterDataDto>()
+
+        return try {
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT * FROM MasterData ORDER BY ROWID DESC LIMIT 20;")
+
+            while (rs.next()) {
+                val map = mutableMapOf<String, String>()
+                val metaData = rs.metaData
+                for (i in 1..metaData.columnCount) {
+                    val colName = metaData.getColumnName(i).lowercase().trim()
+                    map[colName] = rs.getString(i) ?: ""
+                }
+
+                fun getVal(vararg keys: String): String {
+                    for (key in keys) {
+                        val value = map[key.lowercase()]
+                        if (!value.isNullOrBlank()) return value
+                    }
+                    return ""
+                }
+
+                val dto = MasterDataDto(
+                    id = getVal("id"),
+                    slNo = getVal("sl_no_1", "sl_no", "slno"),
+                    empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code"),
+                    employeeName = getVal("employee_name_3", "employee_name"),
+                    fathersName = getVal("fathers_name_4", "fathers_name"),
+                    gender = getVal("gender_5", "gender"),
+                    dob = getVal("dob_6", "dob"),
+                    designation = getVal("designation_7", "designation"),
+                    department = getVal("department_8", "department"),
+                    branchName = getVal("branch_name_9", "branch_name", "branch"),
+                    dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
+                    empStatus = getVal("emp_status_35", "emp_status"),
+                    empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
+                    salaryStatus = getVal("salary_status"),
+                    personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
+                    contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
+                    aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
+                    panCardNo = getVal("pan_card_no_17", "pan_card_no"),
+                    bankName = getVal("bank_name_19", "bank_name", "bank"),
+                    bankAccountNumber = getVal("bank_account_number_20", "bank_account_number", "ac_no"),
+                    ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name", "ifsc"),
+                    esiNo = getVal("esi_no_22", "esi_no", "esic"),
+                    epfUanNo = getVal("epf_uan_no_23", "epf_uan_no", "epf"),
+                    uanName = getVal("uan_name_24", "uan_name")
+                )
+                resultList.add(dto)
+            }
+            rs.close()
+            stmt.close()
+            resultList
+        } catch (e: Exception) {
+            logger.error("Error fetching last 20 records: ${e.message}", e)
+            emptyList()
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+
+    // SalaryHistory ଫେଚ୍ କରିବା ପାଇଁ Last 20 Records ଏବଂ Last 4 digits Matching ଲଜିକ୍
+    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
+        val conn = getConnection() ?: return emptyList()
+        val cleanEmpId = rawEmpId.trim()
+        
+        if (cleanEmpId.length < 4) return emptyList()
+        val last4Digits = cleanEmpId.takeLast(4)
+
+        // ୧. ପ୍ରଥମେ MasterData ରୁ ସଠିକ୍ Full Emp ID ଏବଂ Name ଖୋଜି ବାହାର କରିବା
+        var matchedEmpId = cleanEmpId
+        var matchedEmpName = ""
+        
+        try {
+            val stmtMaster = conn.createStatement()
+            val rsMaster = stmtMaster.executeQuery("SELECT * FROM MasterData;")
+            while (rsMaster.next()) {
+                val meta = rsMaster.metaData
+                val m = mutableMapOf<String, String>()
+                for (i in 1..meta.columnCount) {
+                    m[meta.getColumnName(i).lowercase().trim()] = rsMaster.getString(i) ?: ""
+                }
+                val idVal = m["emp_id_2"] ?: m["emp_id"] ?: m["empolyee_code"] ?: m["code"] ?: ""
+                if (idVal.trim().endsWith(last4Digits)) {
+                    matchedEmpId = idVal
+                    matchedEmpName = m["employee_name_3"] ?: m["employee_name"] ?: ""
+                    break
+                }
+            }
+            rsMaster.close()
+            stmtMaster.close()
+        } catch (_: Exception) {}
+
+        val resultList = mutableListOf<Map<String, String>>()
+
+        return try {
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT * FROM SalaryHistory;")
+
+            while (rs.next()) {
+                val metaData = rs.metaData
+                val count = metaData.columnCount
+                val map = mutableMapOf<String, String>()
+
+                for (i in 1..count) {
+                    val colName = metaData.getColumnName(i).lowercase().trim()
+                    val colValue = rs.getString(i) ?: ""
+                    map[colName] = colValue
+                }
+
+                val rowEmpCode = getVal(map, "empolyee_code", "emp_id_2", "emp_id", "code")
+                val rowEmpName = getVal(map, "employee_name", "employee_name_3")
+
+                val isMatch = if (rowEmpCode.isNotBlank()) {
+                    rowEmpCode.trim().endsWith(last4Digits)
+                } else {
+                    true
+                }
+
+                if (isMatch) {
+                    val finalEmpId = if (rowEmpCode.isNotBlank()) rowEmpCode else matchedEmpId
+                    val finalEmpName = if (rowEmpName.isNotBlank()) rowEmpName else matchedEmpName
+
+                    val dtoMap = mapOf(
+                        "month" to getVal(map, "month"),
+                        "sl_no_1" to getVal(map, "slno", "sl_no_1", "sl_no"),
+                        "emp_id_2" to finalEmpId,
+                        "employee_name_3" to finalEmpName,
+                        "designation_7" to getVal(map, "designation"),
+                        "department_8" to getVal(map, "department"),
+                        "branch_name_9" to getVal(map, "branch", "branch_name_9"),
+                        "portfolio_7" to getVal(map, "portfolio"),
+                        "paid_days_8" to getVal(map, "paid_days"),
+                        "basic_da_9" to getVal(map, "basic__da", "basic_da_9"),
+                        "hra_10" to getVal(map, "hra"),
+                        "conveyance_11" to getVal(map, "conveyance"),
+                        "medical_allowance_12" to getVal(map, "medical_allowance"),
+                        "education_allowance_13" to getVal(map, "education_allowance"),
+                        "lunch_canteen_allownance_14" to getVal(map, "lunchcanteen_allownance", "lunch_canteen_allownance_14"),
+                        "special_allowance_15" to getVal(map, "special_allowance"),
+                        "hravariable_39" to getVal(map, "hravariable"),
+                        "other_allowance_17" to getVal(map, "other_allowance"),
+                        "daaosa_40" to getVal(map, "daaosa"),
+                        "arrears_increment_41" to getVal(map, "arrears_increment"),
+                        "epf55_49" to getVal(map, "epf"),
+                        "esi56_50" to getVal(map, "esic"),
+                        "professional_tax_22" to getVal(map, "professional_tax"),
+                        "tds_42" to getVal(map, "tds"),
+                        "staff_loan_43" to getVal(map, "staff_loan"),
+                        "staff_advance_44" to getVal(map, "staff_advance"),
+                        "others_45" to getVal(map, "others"),
+                        "other_earnings_46" to getVal(map, "other_earnings"),
+                        "gross_earnings_28" to getVal(map, "gross_earnings"),
+                        "gross_deductions_29" to getVal(map, "gross_deductions"),
+                        "net_amount_30" to getVal(map, "net_amount"),
+                        "Status_00" to getVal(map, "status"),
+                        "bank_account_number_20" to getVal(map, "ac_no", "bank_account_number_20"),
+                        "ifsc_code_bank_branch_name_21" to getVal(map, "ifsc", "ifsc_code_bank_branch_name_21"),
+                        "bank_name_19" to getVal(map, "bank", "bank_name_19"),
+                        "backSalarygive" to getVal(map, "back")
+                    )
+                    resultList.add(dtoMap)
+                }
+            }
+            rs.close()
+            stmt.close()
+            
+            // କେବଳ ଶେଷ ୨୦ଟି ରେକର୍ଡ (Last 20 Records) ଫେତ୍ ଦେବ
+            resultList.takeLast(20).reversed()
+        } catch (e: Exception) {
+            logger.error("Error fetching salary history: ${e.message}", e)
+            emptyList()
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun getVal(map: Map<String, String>, vararg keys: String): String {
+        for (key in keys) {
+            val value = map[key.lowercase()]
+            if (!value.isNullOrBlank()) return value
+        }
+        return ""
+    }
+
+    fun getSalaryTableColumns(): List<String> {
+        val conn = getConnection() ?: return listOf("ERROR: Connection is NULL")
+        val result = mutableListOf<String>()
+        try {
+            val stmt = conn.createStatement()
+            val rsCols = stmt.executeQuery("SELECT * FROM SalaryHistory LIMIT 1;")
+            if (rsCols.next()) {
+                val metaData = rsCols.metaData
+                for (i in 1..metaData.columnCount) {
+                    result.add("COL: " + metaData.getColumnName(i))
+                }
+            } else {
+                result.add("SalaryHistory table is empty")
+            }
+            rsCols.close()
+            stmt.close()
+        } catch (e: Exception) {
+            result.add("EXCEPTION: ${e.message}")
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+        return result
+    }
+}
