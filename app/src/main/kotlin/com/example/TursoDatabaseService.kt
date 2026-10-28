@@ -97,15 +97,13 @@ object TursoDatabaseService {
         return s1 + s2 + s3
     }
 
-    // Standard Multi-Term Search
+    // Standard Multi-Term Search (ଖାଲି String ପଠାଇଲେ ସମସ୍ତ Record ଆସିବ)
     fun searchRecords(query: String): List<MasterDataDto> {
         val conn = getConnection() ?: return emptyList()
 
         val searchTerms = query.trim().lowercase()
             .split(Regex("\\s+"))
             .filter { it.isNotBlank() }
-
-        if (searchTerms.isEmpty()) return emptyList()
 
         val resultList = mutableListOf<MasterDataDto>()
 
@@ -142,10 +140,12 @@ object TursoDatabaseService {
                 val searchableText = "$empId $empName $phone1 $phone2 $branch $designation"
 
                 var isMatch = true
-                for (term in searchTerms) {
-                    if (!searchableText.contains(term)) {
-                        isMatch = false
-                        break
+                if (searchTerms.isNotEmpty()) {
+                    for (term in searchTerms) {
+                        if (!searchableText.contains(term)) {
+                            isMatch = false
+                            break
+                        }
                     }
                 }
 
@@ -192,17 +192,23 @@ object TursoDatabaseService {
 
     // 1. Branch Name ରେ କେବଳ Active Staff (Score 3) Filter
     fun getActiveStaffByBranch(branchQuery: String): List<MasterDataDto> {
-        val allRecords = searchRecords(branchQuery)
+        if (branchQuery.isBlank()) return emptyList()
+        val allRecords = searchRecords("") 
         return allRecords.filter { dto ->
-            calculateStatusScore(dto) == 3 && dto.branchName.lowercase().contains(branchQuery.lowercase())
+            val isActive = calculateStatusScore(dto) == 3
+            val isBranchMatch = dto.branchName.trim().lowercase().contains(branchQuery.lowercase())
+            isActive && isBranchMatch
         }
     }
 
     // 2. Designation ରେ କେବଳ Active Staff (Score 3) Filter
     fun getActiveStaffByDesignation(desgQuery: String): List<MasterDataDto> {
-        val allRecords = searchRecords(desgQuery)
+        if (desgQuery.isBlank()) return emptyList()
+        val allRecords = searchRecords("") 
         return allRecords.filter { dto ->
-            calculateStatusScore(dto) == 3 && dto.designation.lowercase().contains(desgQuery.lowercase())
+            val isActive = calculateStatusScore(dto) == 3
+            val isDesgMatch = dto.designation.trim().lowercase().contains(desgQuery.lowercase())
+            isActive && isDesgMatch
         }
     }
 

@@ -58,15 +58,15 @@ fun Application.module() {
 
             // Smart Dynamic Search (Supports BR, DG, LS & Backend Sorting: 0 -> 1/2 -> 3)
             get("/search") {
-                val rawQuery = call.request.queryParameters["name"] 
-                    ?: call.request.queryParameters["query"]
+                val rawQuery = call.request.queryParameters["query"] 
+                    ?: call.request.queryParameters["name"]
 
                 if (rawQuery.isNullOrBlank()) {
                     call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing search parameter"))
                     return@get
                 }
 
-                val query = rawQuery.trim()
+                val query = rawQuery.trim().replace(Regex("\\s+"), " ")
                 val lowerQuery = query.lowercase()
 
                 val rawResults: List<MasterDataDto> = when {
