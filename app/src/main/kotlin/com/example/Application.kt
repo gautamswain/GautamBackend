@@ -46,6 +46,11 @@ fun Application.module() {
                 call.respond(mapOf("columns" to TursoDatabaseService.getColumns()))
             }
 
+            // Debug route to check SalaryHistory columns
+            get("/salary-columns") {
+                call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
+            }
+
             get("/record/{empId}") {
                 val empId = call.parameters["empId"]
                 if (empId.isNullOrBlank()) {
@@ -154,10 +159,6 @@ fun Application.module() {
                 call.respond(GeminiResponse(reply = GeminiService.generateText(req.prompt)))
             }
         }
-
-get("/salary-columns") {
-    call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
-}
 
         // 5. Add Event Route
         post("/api/add-event") {
