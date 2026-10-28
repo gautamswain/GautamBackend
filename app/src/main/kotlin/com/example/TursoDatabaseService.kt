@@ -97,7 +97,7 @@ object TursoDatabaseService {
         return s1 + s2 + s3
     }
 
-    // Standard Multi-Term Search (ଖାଲି Query ପଠାଇଲେ ସମସ୍ତ Record ଆସିବ)
+    // Standard Multi-Term Search
     fun searchRecords(query: String): List<MasterDataDto> {
         val conn = getConnection() ?: return emptyList()
 
@@ -190,7 +190,7 @@ object TursoDatabaseService {
         }
     }
 
-    // 1. Branch Name ରେ କେବଳ Active Staff (Score 3) Filter
+    // 1. Branch Name ରେ Active Staff (Score 3) Filter
     fun getActiveStaffByBranch(branchQuery: String): List<MasterDataDto> {
         if (branchQuery.isBlank()) return emptyList()
         val allRecords = searchRecords("") 
@@ -201,7 +201,7 @@ object TursoDatabaseService {
         }
     }
 
-    // 2. Designation ରେ କେବଳ Active Staff (Score 3) Filter
+    // 2. Designation ରେ Active Staff (Score 3) Filter
     fun getActiveStaffByDesignation(desgQuery: String): List<MasterDataDto> {
         if (desgQuery.isBlank()) return emptyList()
         val allRecords = searchRecords("") 
@@ -212,7 +212,7 @@ object TursoDatabaseService {
         }
     }
 
-    // 3. Database ରୁ Last 20 Records
+    // 3. Last 20 Records
     fun getLast20Records(): List<MasterDataDto> {
         val conn = getConnection() ?: return emptyList()
         val resultList = mutableListOf<MasterDataDto>()
@@ -276,7 +276,7 @@ object TursoDatabaseService {
         }
     }
 
-    // 4. Emp ID ର last 4 digits (e.g., ADKR1234 / AMPL1234 -> 1234) ଆଧାରରେ SalaryHistory ରୁ ଶେଷ 24 ଟି Record
+    // 4. Emp ID last 4 digits (ADKR1234 / AMPL1234 -> 1234) ଆଧାରରେ SalaryHistory ରୁ ୨୪ ଟି ରେକର୍ଡ
     fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
@@ -288,15 +288,7 @@ object TursoDatabaseService {
 
         return try {
             val stmt = conn.createStatement()
-            
-            val query = """
-                SELECT * FROM SalaryHistory 
-                WHERE emp_id LIKE '%$last4Digits' 
-                ORDER BY ROWID DESC 
-                LIMIT 24;
-            """.trimIndent()
-
-            val rs = stmt.executeQuery(query)
+            val rs = stmt.executeQuery("SELECT * FROM SalaryHistory;")
 
             while (rs.next()) {
                 val metaData = rs.metaData
@@ -308,13 +300,57 @@ object TursoDatabaseService {
                     val colValue = rs.getString(i) ?: ""
                     map[colName] = colValue
                 }
-                resultList.add(map)
+
+                val empIdValue = map["emp_id_2"] ?: map["emp_id"] ?: map["code"] ?: ""
+
+                if (empIdValue.trim().endsWith(last4Digits)) {
+                    val dtoMap = mapOf(
+                        "month" to (map["month"] ?: map["salary_month"] ?: ""),
+                        "sl_no_1" to (map["sl_no_1"] ?: map["sl_no"] ?: ""),
+                        "emp_id_2" to empIdValue,
+                        "employee_name_3" to (map["employee_name_3"] ?: map["employee_name"] ?: ""),
+                        "designation_7" to (map["designation_7"] ?: map["designation"] ?: ""),
+                        "department_8" to (map["department_8"] ?: map["department"] ?: ""),
+                        "branch_name_9" to (map["branch_name_9"] ?: map["branch"] ?: ""),
+                        "portfolio_7" to (map["portfolio_7"] ?: map["portfolio"] ?: ""),
+                        "paid_days_8" to (map["paid_days_8"] ?: map["paid_days"] ?: ""),
+                        "basic_da_9" to (map["basic_da_9"] ?: map["basic_da"] ?: ""),
+                        "hra_10" to (map["hra_10"] ?: map["hra"] ?: ""),
+                        "conveyance_11" to (map["conveyance_11"] ?: map["conveyance"] ?: ""),
+                        "medical_allowance_12" to (map["medical_allowance_12"] ?: map["medical_allowance"] ?: ""),
+                        "education_allowance_13" to (map["education_allowance_13"] ?: map["education_allowance"] ?: ""),
+                        "lunch_canteen_allownance_14" to (map["lunch_canteen_allownance_14"] ?: map["lunch_canteen_allowance"] ?: ""),
+                        "special_allowance_15" to (map["special_allowance_15"] ?: map["special_allowance"] ?: ""),
+                        "hravariable_39" to (map["hravariable_39"] ?: map["hra_variable_16"] ?: ""),
+                        "other_allowance_17" to (map["other_allowance_17"] ?: map["other_allowance"] ?: ""),
+                        "daaosa_40" to (map["daaosa_40"] ?: map["daa_osa_18"] ?: ""),
+                        "arrears_increment_41" to (map["arrears_increment_41"] ?: map["arrears_increment_19"] ?: ""),
+                        "epf55_49" to (map["epf55_49"] ?: map["epf_20"] ?: ""),
+                        "esi56_50" to (map["esi56_50"] ?: map["esic_21"] ?: ""),
+                        "professional_tax_22" to (map["professional_tax_22"] ?: map["pt"] ?: ""),
+                        "tds_42" to (map["tds_42"] ?: map["tds_23"] ?: ""),
+                        "staff_loan_43" to (map["staff_loan_43"] ?: map["staff_loan_24"] ?: ""),
+                        "staff_advance_44" to (map["staff_advance_44"] ?: map["staff_advance_25"] ?: ""),
+                        "others_45" to (map["others_45"] ?: map["others_26"] ?: ""),
+                        "other_earnings_46" to (map["other_earnings_46"] ?: map["other_earnings_27"] ?: ""),
+                        "gross_earnings_28" to (map["gross_earnings_28"] ?: map["gross_earnings"] ?: ""),
+                        "gross_deductions_29" to (map["gross_deductions_29"] ?: map["gross_deductions"] ?: ""),
+                        "net_amount_30" to (map["net_amount_30"] ?: map["net_amount"] ?: ""),
+                        "Status_00" to (map["status_00"] ?: map["status_31"] ?: map["status"] ?: ""),
+                        "bank_account_number_20" to (map["bank_account_number_20"] ?: map["ac_no_32"] ?: ""),
+                        "ifsc_code_bank_branch_name_21" to (map["ifsc_code_bank_branch_name_21"] ?: map["ifsc_33"] ?: ""),
+                        "bank_name_19" to (map["bank_name_19"] ?: map["bank_34"] ?: ""),
+                        "backSalarygive" to (map["backsalarygive"] ?: map["sal_h_48"] ?: map["back_35"] ?: "")
+                    )
+                    resultList.add(dtoMap)
+                }
             }
             rs.close()
             stmt.close()
-            resultList
+            
+            resultList.takeLast(24).reversed()
         } catch (e: Exception) {
-            logger.error("Error fetching salary history for last 4 digits '$last4Digits': ${e.message}", e)
+            logger.error("Error fetching salary history: ${e.message}", e)
             emptyList()
         } finally {
             try { conn.close() } catch (_: Exception) {}

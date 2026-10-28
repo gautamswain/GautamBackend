@@ -22,7 +22,7 @@ fun main() {
 }
 
 fun Application.module() {
-    // 1. Initialize Turso Database Connection
+    // 1. Turso Database Connection Initialize
     TursoDatabaseService.init()
 
     install(CallLogging) {
@@ -56,7 +56,7 @@ fun Application.module() {
                 }
             }
 
-            // Smart Dynamic Search (Supports BR, DG, LS & Backend Sorting: 0 -> 1/2 -> 3)
+            // Dynamic Search (Supports BR, DG, LS & Backend Sorting: 0 -> 1/2 -> 3)
             get("/search") {
                 val rawQuery = call.request.queryParameters["query"] 
                     ?: call.request.queryParameters["name"]
@@ -70,30 +70,29 @@ fun Application.module() {
                 val lowerQuery = query.lowercase()
 
                 val rawResults: List<MasterDataDto> = when {
-                    // 1. "br " -> Filter Active Staff by Branch Name
+                    // "br " -> Filter Active Staff by Branch Name
                     lowerQuery.startsWith("br ") -> {
                         val branchTerm = query.substring(3).trim()
                         TursoDatabaseService.getActiveStaffByBranch(branchTerm)
                     }
 
-                    // 2. "dg " -> Filter Active Staff by Designation
+                    // "dg " -> Filter Active Staff by Designation
                     lowerQuery.startsWith("dg ") -> {
                         val desgTerm = query.substring(3).trim()
                         TursoDatabaseService.getActiveStaffByDesignation(desgTerm)
                     }
 
-                    // 3. "ls" -> Fetch Last 20 Recent Records
+                    // "ls" -> Fetch Last 20 Recent Records
                     lowerQuery.startsWith("ls") -> {
                         TursoDatabaseService.getLast20Records()
                     }
 
-                    // Standard Search Fallback
                     else -> {
                         TursoDatabaseService.searchRecords(query)
                     }
                 }
 
-                // Backend Level Sorting: Score 0 -> Score 1/2 -> Score 3
+                // Sorting: Score 0 -> Score 1/2 -> Score 3
                 val sortedResults = rawResults.sortedBy { dto ->
                     TursoDatabaseService.calculateStatusScore(dto)
                 }
@@ -101,7 +100,7 @@ fun Application.module() {
                 call.respond(sortedResults)
             }
 
-            // 4. Salary History API by Emp ID Last 4 Digits (e.g., ADKR1234 / AMPL1234 -> Last 24 records)
+            // Salary History API by Emp ID Last 4 Digits
             get("/salary-history/{empId}") {
                 val empId = call.parameters["empId"]
                 if (empId.isNullOrBlank()) {
@@ -120,7 +119,7 @@ fun Application.module() {
             }
         }
 
-        // 3. Google Sheets Data Routes
+        // 3. Google Sheets Routes
         get("/api/combined-data") {
             val rawData = GoogleSheetsBackendService.readCell("Sheet1!A15")
             val fallback = "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
@@ -144,7 +143,7 @@ fun Application.module() {
             call.respond(DayDescriptionResponse(date = date, description = desc))
         }
 
-        // 4. Gemini AI Chat Routes
+        // 4. Gemini AI Routes
         route("/api/chat") {
             get {
                 val prompt = call.request.queryParameters["prompt"] ?: "Hello Gemini"
