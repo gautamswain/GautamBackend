@@ -271,7 +271,7 @@ object TursoDatabaseService {
         }
     }
 
-    // SalaryHistory ଫେଚ୍ କରିବା ପାଇଁ Last 20 Records ଏବଂ Last 4 digits Matching ଲଜିକ୍
+    // SalaryHistory ଫେଚ୍ କରିବା ପାଇଁ Last 4 Digits Matching ଲଜିକ୍ (getSalaryHistoryByEmpIdLast4)
     fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
@@ -385,21 +385,27 @@ object TursoDatabaseService {
         }
     }
 
-    // ନୂତନ Method: କୌଣସି ନିର୍ଦ୍ଦିଷ୍ଟ Employee ID ପାଇଁ ସିଧାସଳଖ SQL query ଦ୍ୱାରା ଶେଷ ୨୦ଟି ରେକର୍ଡ ଫେଚ୍ କରିବା
-    fun getSalaryHistoryLast20(targetEmpId: String): List<Map<String, String>> {
+    // ଶେଷ ୪ ଅଙ୍କ (Last 4 Digits) ଦ୍ୱାରା ସିଧାସଳଖ SQL query ଦ୍ୱାରା ଶେଷ ୨୦ଟି ରେକର୍ଡ ଫେଚ୍ କରିବା (getSalaryHistoryLast20)
+    fun getSalaryHistoryLast20(rawEmpId: String): List<Map<String, String>> {
         val conn = getConnection() ?: return emptyList()
+        val cleanEmpId = rawEmpId.trim()
+        
+        if (cleanEmpId.length < 4) return emptyList()
+        val last4Digits = cleanEmpId.takeLast(4)
+        val searchPattern = "%$last4Digits"
+
         val resultList = mutableListOf<Map<String, String>>()
         
         val sql = """
             SELECT * FROM SalaryHistory 
-            WHERE LOWER(emp_id_2) = LOWER(?) 
+            WHERE LOWER(emp_id_2) LIKE LOWER(?) 
             ORDER BY rowid DESC 
             LIMIT 20;
         """.trimIndent()
 
         return try {
             val pstmt = conn.prepareStatement(sql)
-            pstmt.setString(1, targetEmpId.trim())
+            pstmt.setString(1, searchPattern)
             val rs = pstmt.executeQuery()
 
             val metaData = rs.metaData
@@ -457,7 +463,7 @@ object TursoDatabaseService {
             pstmt.close()
             resultList.reversed()
         } catch (e: Exception) {
-            logger.error("Error fetching salary history for empId $targetEmpId: ${e.message}", e)
+            logger.error("Error fetching salary history for empId pattern $last4Digits: ${e.message}", e)
             emptyList()
         } finally {
             try { conn.close() } catch (_: Exception) {}
