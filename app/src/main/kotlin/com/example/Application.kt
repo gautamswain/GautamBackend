@@ -155,6 +155,10 @@ fun Application.module() {
             }
         }
 
+get("/salary-columns") {
+    call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
+}
+
         // 5. Add Event Route
         post("/api/add-event") {
             var date = ""; var event = ""; var type = 2
