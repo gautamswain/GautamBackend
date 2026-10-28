@@ -42,12 +42,10 @@ fun Application.module() {
         // 2. Turso DB Routes
         route("/api/turso") {
             
-            // Get columns info
             get("/columns") {
                 call.respond(mapOf("columns" to TursoDatabaseService.getColumns()))
             }
 
-            // Get exact single record by Emp ID
             get("/record/{empId}") {
                 val empId = call.parameters["empId"]
                 if (empId.isNullOrBlank()) {
@@ -58,15 +56,49 @@ fun Application.module() {
                 }
             }
 
-            // Updated Multi-Term Search (Name + Code + PhoneNo + PhoneNo2 + Branch + Designation)
+            // Smart Dynamic Search (Supports BR, DG, LS & Backend Sorting: 0 -> 1/2 -> 3)
             get("/search") {
-                val query = call.request.queryParameters["name"] ?: call.request.queryParameters["query"]
-                if (query.isNullOrBlank()) {
+                val rawQuery = call.request.queryParameters["name"] 
+                    ?: call.request.queryParameters["query"]
+
+                if (rawQuery.isNullOrBlank()) {
                     call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing search parameter"))
-                } else {
-                    val records = TursoDatabaseService.searchRecords(query)
-                    call.respond(records)
+                    return@get
                 }
+
+                val query = rawQuery.trim()
+                val lowerQuery = query.lowercase()
+
+                val rawResults: List<MasterDataDto> = when {
+                    // 1. "br " -> Filter Active Staff by Branch Name
+                    lowerQuery.startsWith("br ") -> {
+                        val branchTerm = query.substring(3).trim()
+                        TursoDatabaseService.getActiveStaffByBranch(branchTerm)
+                    }
+
+                    // 2. "dg " -> Filter Active Staff by Designation
+                    lowerQuery.startsWith("dg ") -> {
+                        val desgTerm = query.substring(3).trim()
+                        TursoDatabaseService.getActiveStaffByDesignation(desgTerm)
+                    }
+
+                    // 3. "ls" -> Fetch Last 20 Recent Records
+                    lowerQuery.startsWith("ls") -> {
+                        TursoDatabaseService.getLast20Records()
+                    }
+
+                    // Standard Search Fallback
+                    else -> {
+                        TursoDatabaseService.searchRecords(query)
+                    }
+                }
+
+                // Backend Level Sorting: Score 0 -> Score 1/2 -> Score 3
+                val sortedResults = rawResults.sortedBy { dto ->
+                    TursoDatabaseService.calculateStatusScore(dto)
+                }
+
+                call.respond(sortedResults)
             }
         }
 

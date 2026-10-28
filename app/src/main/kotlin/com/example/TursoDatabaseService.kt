@@ -89,11 +89,18 @@ object TursoDatabaseService {
         return results.firstOrNull()
     }
 
-    // Direct Exact Multi-Term Search (Strict Combination of Targeted Fields)
+    // Status Score Formula (0 to 3) Calculate କରିବା Helper
+    fun calculateStatusScore(dto: MasterDataDto): Int {
+        val s1 = if (dto.empStatus.trim() == "1" || dto.empStatus.trim().equals("active", ignoreCase = true)) 1 else 0
+        val s2 = if (dto.empStatusTemp.trim() == "1" || dto.empStatusTemp.trim().equals("active", ignoreCase = true)) 1 else 0
+        val s3 = if (dto.salaryStatus.trim() == "1" || dto.salaryStatus.trim().equals("active", ignoreCase = true)) 1 else 0
+        return s1 + s2 + s3
+    }
+
+    // Standard Multi-Term Search
     fun searchRecords(query: String): List<MasterDataDto> {
         val conn = getConnection() ?: return emptyList()
 
-        // Space ଦ୍ୱାରା multi-word search term split କରାଗଲା (e.g. "jay swa" -> ["jay", "swa"])
         val searchTerms = query.trim().lowercase()
             .split(Regex("\\s+"))
             .filter { it.isNotBlank() }
@@ -125,7 +132,6 @@ object TursoDatabaseService {
                     return ""
                 }
 
-                // Specified 6 Target Fields combination (Name + Code + PhoneNo + PhoneNo2 + Branch + Designation)
                 val empId = getVal("emp_id_2", "emp_id", "code").lowercase()
                 val empName = getVal("employee_name_3", "employee_name").lowercase()
                 val phone1 = getVal("personal_contact_number_14", "personal_contact_number").lowercase()
@@ -135,7 +141,6 @@ object TursoDatabaseService {
 
                 val searchableText = "$empId $empName $phone1 $phone2 $branch $designation"
 
-                // strictly verify that EVERY search term is present in searchableText (No Soundex, No Padding)
                 var isMatch = true
                 for (term in searchTerms) {
                     if (!searchableText.contains(term)) {
@@ -157,6 +162,9 @@ object TursoDatabaseService {
                         department = getVal("department_8", "department"),
                         branchName = getVal("branch_name_9", "branch_name"),
                         dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
+                        empStatus = getVal("emp_status_35", "emp_status"),
+                        empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
+                        salaryStatus = getVal("salary_status"),
                         personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
                         contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
                         aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
@@ -176,6 +184,86 @@ object TursoDatabaseService {
             resultList
         } catch (e: Exception) {
             logger.error("Error searching records for query '$query': ${e.message}", e)
+            emptyList()
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+
+    // 1. Branch Name ରେ କେବଳ Active Staff (Score 3) Filter
+    fun getActiveStaffByBranch(branchQuery: String): List<MasterDataDto> {
+        val allRecords = searchRecords(branchQuery)
+        return allRecords.filter { dto ->
+            calculateStatusScore(dto) == 3 && dto.branchName.lowercase().contains(branchQuery.lowercase())
+        }
+    }
+
+    // 2. Designation ରେ କେବଳ Active Staff (Score 3) Filter
+    fun getActiveStaffByDesignation(desgQuery: String): List<MasterDataDto> {
+        val allRecords = searchRecords(desgQuery)
+        return allRecords.filter { dto ->
+            calculateStatusScore(dto) == 3 && dto.designation.lowercase().contains(desgQuery.lowercase())
+        }
+    }
+
+    // 3. Database ରୁ Last 20 Records
+    fun getLast20Records(): List<MasterDataDto> {
+        val conn = getConnection() ?: return emptyList()
+        val resultList = mutableListOf<MasterDataDto>()
+
+        return try {
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT * FROM MasterData ORDER BY ROWID DESC LIMIT 20;")
+
+            while (rs.next()) {
+                val map = mutableMapOf<String, String>()
+                val metaData = rs.metaData
+                for (i in 1..metaData.columnCount) {
+                    val colName = metaData.getColumnName(i).lowercase().trim()
+                    map[colName] = rs.getString(i) ?: ""
+                }
+
+                fun getVal(vararg keys: String): String {
+                    for (key in keys) {
+                        val value = map[key.lowercase()]
+                        if (!value.isNullOrBlank()) return value
+                    }
+                    return ""
+                }
+
+                val dto = MasterDataDto(
+                    id = getVal("id"),
+                    slNo = getVal("sl_no_1", "sl_no"),
+                    empId = getVal("emp_id_2", "emp_id", "code"),
+                    employeeName = getVal("employee_name_3", "employee_name"),
+                    fathersName = getVal("fathers_name_4", "fathers_name"),
+                    gender = getVal("gender_5", "gender"),
+                    dob = getVal("dob_6", "dob"),
+                    designation = getVal("designation_7", "designation"),
+                    department = getVal("department_8", "department"),
+                    branchName = getVal("branch_name_9", "branch_name"),
+                    dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
+                    empStatus = getVal("emp_status_35", "emp_status"),
+                    empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
+                    salaryStatus = getVal("salary_status"),
+                    personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
+                    contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
+                    aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
+                    panCardNo = getVal("pan_card_no_17", "pan_card_no"),
+                    bankName = getVal("bank_name_19", "bank_name"),
+                    bankAccountNumber = getVal("bank_account_number_20", "bank_account_number"),
+                    ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name"),
+                    esiNo = getVal("esi_no_22", "esi_no"),
+                    epfUanNo = getVal("epf_uan_no_23", "epf_uan_no"),
+                    uanName = getVal("uan_name_24", "uan_name")
+                )
+                resultList.add(dto)
+            }
+            rs.close()
+            stmt.close()
+            resultList
+        } catch (e: Exception) {
+            logger.error("Error fetching last 20 records: ${e.message}", e)
             emptyList()
         } finally {
             try { conn.close() } catch (_: Exception) {}
