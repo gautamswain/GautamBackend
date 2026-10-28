@@ -100,6 +100,24 @@ fun Application.module() {
 
                 call.respond(sortedResults)
             }
+
+            // 4. Salary History API by Emp ID Last 4 Digits (e.g., ADKR1234 / AMPL1234 -> Last 24 records)
+            get("/salary-history/{empId}") {
+                val empId = call.parameters["empId"]
+                if (empId.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing empId parameter"))
+                } else {
+                    val salaryRecords = TursoDatabaseService.getSalaryHistoryByEmpIdLast4(empId)
+                    if (salaryRecords.isNotEmpty()) {
+                        call.respond(salaryRecords)
+                    } else {
+                        call.respond(
+                            HttpStatusCode.NotFound, 
+                            mapOf("error" to "No salary history found matching last 4 digits of $empId")
+                        )
+                    }
+                }
+            }
         }
 
         // 3. Google Sheets Data Routes

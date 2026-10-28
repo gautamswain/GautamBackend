@@ -97,7 +97,7 @@ object TursoDatabaseService {
         return s1 + s2 + s3
     }
 
-    // Standard Multi-Term Search (ଖାଲି String ପଠାଇଲେ ସମସ୍ତ Record ଆସିବ)
+    // Standard Multi-Term Search (ଖାଲି Query ପଠାଇଲେ ସମସ୍ତ Record ଆସିବ)
     fun searchRecords(query: String): List<MasterDataDto> {
         val conn = getConnection() ?: return emptyList()
 
@@ -270,6 +270,51 @@ object TursoDatabaseService {
             resultList
         } catch (e: Exception) {
             logger.error("Error fetching last 20 records: ${e.message}", e)
+            emptyList()
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
+        }
+    }
+
+    // 4. Emp ID ର last 4 digits (e.g., ADKR1234 / AMPL1234 -> 1234) ଆଧାରରେ SalaryHistory ରୁ ଶେଷ 24 ଟି Record
+    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
+        val conn = getConnection() ?: return emptyList()
+        val cleanEmpId = rawEmpId.trim()
+        
+        if (cleanEmpId.length < 4) return emptyList()
+        val last4Digits = cleanEmpId.takeLast(4)
+
+        val resultList = mutableListOf<Map<String, String>>()
+
+        return try {
+            val stmt = conn.createStatement()
+            
+            val query = """
+                SELECT * FROM SalaryHistory 
+                WHERE emp_id LIKE '%$last4Digits' 
+                ORDER BY ROWID DESC 
+                LIMIT 24;
+            """.trimIndent()
+
+            val rs = stmt.executeQuery(query)
+
+            while (rs.next()) {
+                val metaData = rs.metaData
+                val count = metaData.columnCount
+                val map = mutableMapOf<String, String>()
+
+                for (i in 1..count) {
+                    val colName = metaData.getColumnName(i).lowercase().trim()
+                    val colValue = rs.getString(i) ?: ""
+                    map[colName] = colValue
+                }
+                resultList.add(map)
+            }
+            rs.close()
+            stmt.close()
+            resultList
+        } catch (e: Exception) {
+            logger.error("Error fetching salary history for last 4 digits '$last4Digits': ${e.message}", e)
             emptyList()
         } finally {
             try { conn.close() } catch (_: Exception) {}
