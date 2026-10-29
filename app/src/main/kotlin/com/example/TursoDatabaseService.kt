@@ -41,7 +41,8 @@ object TursoDatabaseService {
         }
     }
 
-    private fun getConnection(): Connection? {
+    // Made public so other services can access it
+    fun getConnection(): Connection? {
         return try {
             val props = Properties().apply {
                 setProperty("password", authToken)
@@ -198,13 +199,13 @@ object TursoDatabaseService {
         }
     }
 
-    fun getActiveStaffByDesignation(desgQuery: String): List<MasterDataDto> {
-        if (desgQuery.isBlank()) return emptyList()
+    fun getActiveStaffByDesignation(designationQuery: String): List<MasterDataDto> {
+        if (designationQuery.isBlank()) return emptyList()
         val allRecords = searchRecords("") 
         return allRecords.filter { dto ->
             val isActive = calculateStatusScore(dto) == 3
-            val isDesgMatch = dto.designation.trim().lowercase().contains(desgQuery.lowercase())
-            isActive && isDesgMatch
+            val isDesignationMatch = dto.designation.trim().lowercase().contains(designationQuery.lowercase())
+            isActive && isDesignationMatch
         }
     }
 
@@ -272,7 +273,7 @@ object TursoDatabaseService {
     }
 
     // 1. getSalaryHistoryByEmpIdLast4 Method
-    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
+    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
         
@@ -302,7 +303,7 @@ object TursoDatabaseService {
             stmtMaster.close()
         } catch (_: Exception) {}
 
-        val resultList = mutableListOf<Map<String, String>>()
+        val resultList = mutableListOf>()
 
         return try {
             val stmt = conn.createStatement()
@@ -395,7 +396,7 @@ object TursoDatabaseService {
     }
 
     // 2. getSalaryHistoryLast20 Method (Direct SQL with LIKE)
-    fun getSalaryHistoryLast20(rawEmpId: String): List<Map<String, String>> {
+    fun getSalaryHistoryLast20(rawEmpId: String): List> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
         
@@ -403,7 +404,7 @@ object TursoDatabaseService {
         val last4Digits = cleanEmpId.takeLast(4)
         val searchPattern = "%$last4Digits"
 
-        val resultList = mutableListOf<Map<String, String>>()
+        val resultList = mutableListOf>()
         
         val sql = """
             SELECT * FROM SalaryHistory 

@@ -51,9 +51,9 @@ fun Application.module() {
                 call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
             }
 
-            // Branch-wise Staff Summary Route (BM, ABM, CO counts)
+            // Branch-wise Staff Summary Route (BM, ABM, CO counts) - Fixed to getConnection()
             get("/branch-summary") {
-                val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnectionInternal() }
+                val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
                 call.respond(summaryList)
             }
 
@@ -89,8 +89,8 @@ fun Application.module() {
 
                     // "dg " -> Filter Active Staff by Designation
                     lowerQuery.startsWith("dg ") -> {
-                        val desgTerm = query.substring(3).trim()
-                        TursoDatabaseService.getActiveStaffByDesignation(desgTerm)
+                        val designationTerm = query.substring(3).trim()
+                        TursoDatabaseService.getActiveStaffByDesignation(designationTerm)
                     }
 
                     // "ls" -> Fetch Last 20 Recent Records
