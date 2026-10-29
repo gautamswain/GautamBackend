@@ -51,6 +51,12 @@ fun Application.module() {
                 call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
             }
 
+            // Branch-wise Staff Summary Route (BM, ABM, CO counts)
+            get("/branch-summary") {
+                val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnectionInternal() }
+                call.respond(summaryList)
+            }
+
             get("/record/{empId}") {
                 val empId = call.parameters["empId"]
                 if (empId.isNullOrBlank()) {
