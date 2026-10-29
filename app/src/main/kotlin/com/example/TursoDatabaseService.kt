@@ -41,7 +41,7 @@ object TursoDatabaseService {
         }
     }
 
-    // Made public so other services can access it
+    // Public getConnection method
     fun getConnection(): Connection? {
         return try {
             val props = Properties().apply {
@@ -272,7 +272,7 @@ object TursoDatabaseService {
         }
     }
 
-    // 1. getSalaryHistoryByEmpIdLast4 Method
+    // 1. getSalaryHistoryByEmpIdLast4 Method (Fixed with proper return type and mutable list)
     fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
@@ -395,7 +395,7 @@ object TursoDatabaseService {
         }
     }
 
-    // 2. getSalaryHistoryLast20 Method (Direct SQL with LIKE)
+    // 2. getSalaryHistoryLast20 Method (Fixed with proper return type and mutable list)
     fun getSalaryHistoryLast20(rawEmpId: String): List> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
