@@ -1,4 +1,6 @@
 package com.example
+
+import com.example.services.GoogleDriveService
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.serialization.kotlinx.json.*
@@ -137,9 +139,9 @@ fun Application.module() {
             }
         }
 
-        // 3. Google Drive Report Upload Routes
+        // 3. Google Drive Report Upload Routes (GET କରାଗଲା ଯათେ ବ୍ରାଉଜର୍‌ରୁ ସିଧାସଳଖ ଟେଷ୍ଟ୍ ହୋଇପାରିବ)
         route("/api/drive") {
-            post("/upload-branch-summary-report") {
+            get("/upload-branch-summary-report") {
                 try {
                     val fileName = GoogleDriveReportService.uploadBranchSummaryReport()
                     call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
@@ -148,7 +150,7 @@ fun Application.module() {
                 }
             }
 
-            post("/upload-staff-status-report") {
+            get("/upload-staff-status-report") {
                 try {
                     val fileName = GoogleDriveReportService.uploadStaffStatusReport()
                     call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
