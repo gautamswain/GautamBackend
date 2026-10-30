@@ -58,13 +58,14 @@ object BranchSummaryService {
                     }
 
                     when {
-                        designation.contains("branch manager") || designation == "bm" -> {
+                        designation.contains("assistant branch manager") || designation.contains("abm") -> {
+
                             branchData["bm"] = branchData["bm"]!! + 1
                         }
-                        designation.contains("assistant branch manager") || designation.contains("abm") -> {
+			designation.contains("branch manager") || designation == "bm" -> {                        
                             branchData["abm"] = branchData["abm"]!! + 1
                         }
-                        designation.contains("credit officer") || designation.contains("senior credit officer") || designation.contains("co") || designation.contains("sco") -> {
+                        designation.contains("credit officer") || designation.contains("senior credit officer") || designation.contains("co") || 				designation.contains("sco") -> {
                             branchData["co"] = branchData["co"]!! + 1
                         }
                     }
