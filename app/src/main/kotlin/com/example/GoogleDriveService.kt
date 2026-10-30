@@ -1,4 +1,4 @@
-package com.example.services
+package com.example
 
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport
 import com.google.api.client.http.InputStreamContent
@@ -44,7 +44,7 @@ class GoogleDriveService(
         val folderId = folderResult.files.firstOrNull()?.id ?: run {
             val folderMetadata = File().apply {
                 name = "AdhikarHR"
-                mimeType = "application/vnd.google-apps.folder"
+                this.mimeType = "application/vnd.google-apps.folder"
             }
             driveService.files().create(folderMetadata).setFields("id").execute().id
         }
