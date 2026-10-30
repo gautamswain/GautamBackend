@@ -8,10 +8,12 @@ import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
 import com.google.auth.http.HttpCredentialsAdapter
 import com.google.auth.oauth2.GoogleCredentials
+import org.slf4j.LoggerFactory
 import java.io.ByteArrayInputStream
 
 object GoogleDriveReportService {
     private const val APPLICATION_NAME = "AdhikarHR Drive Service"
+    private val logger = LoggerFactory.getLogger(GoogleDriveReportService::class.java)
 
     private fun getDriveService(): Drive {
         val credentialsJson = System.getenv("GOOGLE_CREDENTIALS_JSON1") 
@@ -42,54 +44,64 @@ object GoogleDriveReportService {
     }
 
     fun uploadBranchSummaryReport(): String {
-        val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
-        val reportContent = StringBuilder("Branch Name | CM | AM | BM | ABM | SCO | CO | Total\n")
-        summaryList.forEach { item ->
-            val total = item.clusterManagerCount + item.areaManagerCount + item.branchManagerCount + 
-                        item.assistantBranchManagerCount + item.seniorCreditOfficerCount + item.creditOfficerCount
-            reportContent.append("${item.branchName} | ${item.clusterManagerCount} | ${item.areaManagerCount} | ${item.branchManagerCount} | ${item.assistantBranchManagerCount} | ${item.seniorCreditOfficerCount} | ${item.creditOfficerCount} | $total\n")
+        try {
+            val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
+            val reportContent = StringBuilder("Branch Name | CM | AM | BM | ABM | SCO | CO | Total\n")
+            summaryList.forEach { item ->
+                val total = item.clusterManagerCount + item.areaManagerCount + item.branchManagerCount + 
+                            item.assistantBranchManagerCount + item.seniorCreditOfficerCount + item.creditOfficerCount
+                reportContent.append("${item.branchName} | ${item.clusterManagerCount} | ${item.areaManagerCount} | ${item.branchManagerCount} | ${item.assistantBranchManagerCount} | ${item.seniorCreditOfficerCount} | ${item.creditOfficerCount} | $total\n")
+            }
+
+            val driveService = getDriveService()
+            val folderId = getOrCreateAdhikarHrFolder(driveService)
+
+            val fileMetadata = File().apply {
+                name = "Branch_Summary_Report_${System.currentTimeMillis()}.txt"
+                parents = listOf(folderId)
+            }
+            val contentStream = ByteArrayInputStream(reportContent.toString().toByteArray(Charsets.UTF_8))
+            val mediaContent = InputStreamContent("text/plain", contentStream)
+
+            val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
+                .setFields("id, name")
+                .execute()
+
+            return uploadedFile.name
+        } catch (e: Exception) {
+            logger.error("Error in uploadBranchSummaryReport: ${e.message}", e)
+            throw e
         }
-
-        val driveService = getDriveService()
-        val folderId = getOrCreateAdhikarHrFolder(driveService)
-
-        val fileMetadata = File().apply {
-            name = "Branch_Summary_Report_${System.currentTimeMillis()}.txt"
-            parents = listOf(folderId)
-        }
-        val contentStream = ByteArrayInputStream(reportContent.toString().toByteArray(Charsets.UTF_8))
-        val mediaContent = InputStreamContent("text/plain", contentStream)
-
-        val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
-            .setFields("id, name")
-            .execute()
-
-        return uploadedFile.name
     }
 
     fun uploadStaffStatusReport(): String {
-        val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
-        val reportContent = StringBuilder("Branch Name | Emp ID | Employee Name | Designation | Phone 1 | Phone 2\n")
-        summaryList.forEach { item ->
-            item.staffList.forEach { staff ->
-                reportContent.append("${item.branchName} | ${staff.empId} | ${staff.employeeName} | ${staff.designation} | ${staff.phoneNo1} | ${staff.phoneNo2}\n")
+        try {
+            val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
+            val reportContent = StringBuilder("Branch Name | Emp ID | Employee Name | Designation | Phone 1 | Phone 2\n")
+            summaryList.forEach { item ->
+                item.staffList.forEach { staff ->
+                    reportContent.append("${item.branchName} | ${staff.empId} | ${staff.employeeName} | ${staff.designation} | ${staff.phoneNo1} | ${staff.phoneNo2}\n")
+                }
             }
+
+            val driveService = getDriveService()
+            val folderId = getOrCreateAdhikarHrFolder(driveService)
+
+            val fileMetadata = File().apply {
+                name = "Staff_Status_Report_${System.currentTimeMillis()}.txt"
+                parents = listOf(folderId)
+            }
+            val contentStream = ByteArrayInputStream(reportContent.toString().toByteArray(Charsets.UTF_8))
+            val mediaContent = InputStreamContent("text/plain", contentStream)
+
+            val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
+                .setFields("id, name")
+                .execute()
+
+            return uploadedFile.name
+        } catch (e: Exception) {
+            logger.error("Error in uploadStaffStatusReport: ${e.message}", e)
+            throw e
         }
-
-        val driveService = getDriveService()
-        val folderId = getOrCreateAdhikarHrFolder(driveService)
-
-        val fileMetadata = File().apply {
-            name = "Staff_Status_Report_${System.currentTimeMillis()}.txt"
-            parents = listOf(folderId)
-        }
-        val contentStream = ByteArrayInputStream(reportContent.toString().toByteArray(Charsets.UTF_8))
-        val mediaContent = InputStreamContent("text/plain", contentStream)
-
-        val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
-            .setFields("id, name")
-            .execute()
-
-        return uploadedFile.name
     }
 }
