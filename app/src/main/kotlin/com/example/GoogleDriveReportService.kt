@@ -7,7 +7,7 @@ import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
 import com.google.auth.http.HttpCredentialsAdapter
-import com.google.auth.oauth2.GoogleCredentials
+import com.google.auth.oauth2.UserCredentials
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -18,11 +18,18 @@ object GoogleDriveReportService {
     private val logger = LoggerFactory.getLogger(GoogleDriveReportService::class.java)
 
     private fun getDriveService(): Drive {
-        val credentialsJson = System.getenv("GOOGLE_CREDENTIALS_JSON1") 
-            ?: throw IllegalStateException("GOOGLE_CREDENTIALS_JSON1 environment variable not set")
+        val clientId = System.getenv("GOOGLE_CLIENT_ID") 
+            ?: throw IllegalStateException("GOOGLE_CLIENT_ID environment variable not set")
+        val clientSecret = System.getenv("GOOGLE_CLIENT_SECRET") 
+            ?: throw IllegalStateException("GOOGLE_CLIENT_SECRET environment variable not set")
+        val refreshToken = System.getenv("GOOGLE_REFRESH_TOKEN") 
+            ?: throw IllegalStateException("GOOGLE_REFRESH_TOKEN environment variable not set")
 
-        val inputStream = ByteArrayInputStream(credentialsJson.toByteArray(Charsets.UTF_8))
-        val credentials = GoogleCredentials.fromStream(inputStream)
+        val credentials = UserCredentials.newBuilder()
+            .setClientId(clientId)
+            .setClientSecret(clientSecret)
+            .setRefreshToken(refreshToken)
+            .build()
             .createScoped(listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE))
 
         val transport = GoogleNetHttpTransport.newTrustedTransport()

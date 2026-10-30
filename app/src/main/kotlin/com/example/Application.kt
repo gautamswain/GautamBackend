@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.services.GoogleDriveService
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.serialization.kotlinx.json.*
@@ -12,6 +13,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.slf4j.event.Level
+import java.io.File
 import java.time.LocalDate
 
 private const val DEFAULT_COLOR_PALETTE = "0xFFD8BFD8-0xFFE6E6FA-0xFF332F21-0xFFFBFAE2-0xFF80D8FF-0xFF000080-0xFF000080-0xFF8BC34A-0xFF80D8FF-0xFF000080-0xFF000080"
@@ -34,24 +36,40 @@ fun Application.module() {
         json() 
     }
 
+    // Google Drive Service Initialization using Environment Variables
+    val clientId = System.getenv("GOOGLE_CLIENT_ID") ?: ""
+    val clientSecret = System.getenv("GOOGLE_CLIENT_SECRET") ?: ""
+    val refreshToken = System.getenv("GOOGLE_REFRESH_TOKEN") ?: ""
+    val driveService = GoogleDriveService(clientId, clientSecret, refreshToken)
+
     routing {
         get("/") { 
             call.respondText("Welcome to Ktor Backend!") 
         }
 
+        // Test Drive Upload Endpoint
+        get("/upload-test") {
+            try {
+                val tempFile = File.createTempFile("test_upload", ".txt").apply {
+                    writeText("হ্যালো Ktor Google Drive Integration with OAuth!")
+                }
+                val uploadResult = driveService.uploadFile(tempFile, "text/plain")
+                call.respondText("File Uploaded Successfully!\nResponse: $uploadResult")
+            } catch (e: Exception) {
+                call.respondText("Upload Failed: ${e.localizedMessage}")
+            }
+        }
+
         // 2. Turso DB Routes
         route("/api/turso") {
-            
             get("/columns") {
                 call.respond(mapOf("columns" to TursoDatabaseService.getColumns()))
             }
 
-            // Debug route to check SalaryHistory columns
             get("/salary-columns") {
                 call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
             }
 
-            // Branch-wise Staff Summary Route (BM, ABM, CO counts) - Fixed to getConnection()
             get("/branch-summary") {
                 val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
                 call.respond(summaryList)
@@ -67,7 +85,6 @@ fun Application.module() {
                 }
             }
 
-            // Dynamic Search (Supports BR, DG, LS & Backend Sorting: 0 -> 1/2 -> 3)
             get("/search") {
                 val rawQuery = call.request.queryParameters["query"] 
                     ?: call.request.queryParameters["name"]
@@ -81,29 +98,22 @@ fun Application.module() {
                 val lowerQuery = query.lowercase()
 
                 val rawResults: List<MasterDataDto> = when {
-                    // "br " -> Filter Active Staff by Branch Name
                     lowerQuery.startsWith("br ") -> {
                         val branchTerm = query.substring(3).trim()
                         TursoDatabaseService.getActiveStaffByBranch(branchTerm)
                     }
-
-                    // "dg " -> Filter Active Staff by Designation
                     lowerQuery.startsWith("dg ") -> {
                         val designationTerm = query.substring(3).trim()
                         TursoDatabaseService.getActiveStaffByDesignation(designationTerm)
                     }
-
-                    // "ls" -> Fetch Last 20 Recent Records
                     lowerQuery.startsWith("ls") -> {
                         TursoDatabaseService.getLast20Records()
                     }
-
                     else -> {
                         TursoDatabaseService.searchRecords(query)
                     }
                 }
 
-                // Sorting: Score 0 -> Score 1/2 -> Score 3
                 val sortedResults = rawResults.sortedBy { dto ->
                     TursoDatabaseService.calculateStatusScore(dto)
                 }
@@ -111,7 +121,6 @@ fun Application.module() {
                 call.respond(sortedResults)
             }
 
-            // Salary History API by Emp ID Last 4 Digits
             get("/salary-history/{empId}") {
                 val empId = call.parameters["empId"]
                 if (empId.isNullOrBlank()) {
