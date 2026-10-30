@@ -162,7 +162,7 @@ object TursoDatabaseService {
                         dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
                         empStatus = getVal("emp_status_35", "emp_status"),
                         empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
-                        salaryStatus = getVal("salary_status"),
+                        salaryStatus = getVal("salary_status","slary_37"),
                         personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
                         contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
                         aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
