@@ -8,6 +8,8 @@ import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
 import com.google.auth.http.HttpCredentialsAdapter
 import com.google.auth.oauth2.GoogleCredentials
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayInputStream
 
@@ -43,7 +45,7 @@ object GoogleDriveReportService {
         }
     }
 
-    fun uploadBranchSummaryReport(): String {
+    suspend fun uploadBranchSummaryReport(): String = withContext(Dispatchers.IO) {
         try {
             val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
             val reportContent = StringBuilder("Branch Name | CM | AM | BM | ABM | SCO | CO | Total\n")
@@ -67,14 +69,14 @@ object GoogleDriveReportService {
                 .setFields("id, name")
                 .execute()
 
-            return uploadedFile.name
+            uploadedFile.name
         } catch (e: Exception) {
             logger.error("Error in uploadBranchSummaryReport: ${e.message}", e)
             throw e
         }
     }
 
-    fun uploadStaffStatusReport(): String {
+    suspend fun uploadStaffStatusReport(): String = withContext(Dispatchers.IO) {
         try {
             val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
             val reportContent = StringBuilder("Branch Name | Emp ID | Employee Name | Designation | Phone 1 | Phone 2\n")
@@ -98,7 +100,7 @@ object GoogleDriveReportService {
                 .setFields("id, name")
                 .execute()
 
-            return uploadedFile.name
+            uploadedFile.name
         } catch (e: Exception) {
             logger.error("Error in uploadStaffStatusReport: ${e.message}", e)
             throw e
