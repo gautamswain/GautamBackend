@@ -69,7 +69,6 @@ object BranchSummaryService {
                     val empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code")
                     val empName = getVal("employee_name_3", "employee_name")
                     
-                    // Sothik database column name anuyayi mapping
                     val phone1 = getVal("personal_contact_number_14", "personal_contact_number", "contact_no_1", "phone_1")
                     val phone2 = getVal("contact_no_2_15", "contact_no_2", "phone_2")
 
@@ -94,7 +93,7 @@ object BranchSummaryService {
                         )
                     }
 
-                    // Sothik krama anusara designation check kariba
+                    // Strict Order Sorting Mapping
                     when {
                         designationLower.contains("cluster manager") || designationLower == "cm" -> {
                             counts["cm"] = counts["cm"]!! + 1
@@ -108,10 +107,10 @@ object BranchSummaryService {
                         designationLower.contains("branch manager") || designationLower == "bm" -> {                        
                             counts["bm"] = counts["bm"]!! + 1
                         }
-                        designationLower.contains("senior credit officer") || designationLower.contains("sco") -> {
+                        designationLower.contains("senior credit officer") || designationLower.contains("senior credit manager") || designationLower.contains("sco") -> {
                             counts["sco"] = counts["sco"]!! + 1
                         }
-                        designationLower.contains("credit officer") || designationLower == "co" -> {
+                        designationLower.contains("credit officer") || designationLower.contains("credit manager") || designationLower == "co" -> {
                             counts["co"] = counts["co"]!! + 1
                         }
                     }
