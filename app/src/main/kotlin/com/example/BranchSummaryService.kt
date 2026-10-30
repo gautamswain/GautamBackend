@@ -7,7 +7,9 @@ import java.sql.Connection
 data class StaffDetailDto(
     val empId: String,
     val employeeName: String,
-    val designation: String
+    val designation: String,
+    val phoneNo1: String,
+    val phoneNo2: String
 )
 
 @Serializable
@@ -66,9 +68,19 @@ object BranchSummaryService {
                     
                     val empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code")
                     val empName = getVal("employee_name_3", "employee_name")
+                    
+                    // Sothik database column name anuyayi mapping
+                    val phone1 = getVal("personal_contact_number_14", "personal_contact_number", "contact_no_1", "phone_1")
+                    val phone2 = getVal("contact_no_2_15", "contact_no_2", "phone_2")
 
                     branchStaffMap.getOrPut(branch) { mutableListOf() }.add(
-                        StaffDetailDto(empId = empId, employeeName = empName, designation = rawDesignation)
+                        StaffDetailDto(
+                            empId = empId, 
+                            employeeName = empName, 
+                            designation = rawDesignation,
+                            phoneNo1 = phone1,
+                            phoneNo2 = phone2
+                        )
                     )
 
                     val counts = branchCountsMap.getOrPut(branch) {
@@ -82,7 +94,7 @@ object BranchSummaryService {
                         )
                     }
 
-                    // Sothik Krama anusara Designation Check kariba
+                    // Sothik krama anusara designation check kariba
                     when {
                         designationLower.contains("cluster manager") || designationLower == "cm" -> {
                             counts["cm"] = counts["cm"]!! + 1
