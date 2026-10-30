@@ -13,9 +13,12 @@ data class StaffDetailDto(
 @Serializable
 data class BranchStaffSummary(
     val branchName: String,
+    val clusterManagerCount: Int,
+    val areaManagerCount: Int,
     val branchManagerCount: Int,
     val assistantBranchManagerCount: Int,
-    val creditOfficerTotalCount: Int,
+    val seniorCreditOfficerCount: Int,
+    val creditOfficerCount: Int,
     val staffList: List<StaffDetailDto>
 )
 
@@ -69,18 +72,34 @@ object BranchSummaryService {
                     )
 
                     val counts = branchCountsMap.getOrPut(branch) {
-                        mutableMapOf("bm" to 0, "abm" to 0, "co" to 0)
+                        mutableMapOf(
+                            "cm" to 0, 
+                            "am" to 0, 
+                            "bm" to 0, 
+                            "abm" to 0, 
+                            "sco" to 0, 
+                            "co" to 0
+                        )
                     }
 
-                    // Sothik Krama: Prathame Assistant Branch Manager ku check karibe
+                    // Sothik Krama anusara Designation Check kariba
                     when {
+                        designationLower.contains("cluster manager") || designationLower == "cm" -> {
+                            counts["cm"] = counts["cm"]!! + 1
+                        }
+                        designationLower.contains("area manager") || designationLower == "am" -> {
+                            counts["am"] = counts["am"]!! + 1
+                        }
                         designationLower.contains("assistant branch manager") || designationLower.contains("abm") -> {
                             counts["abm"] = counts["abm"]!! + 1
                         }
                         designationLower.contains("branch manager") || designationLower == "bm" -> {                        
                             counts["bm"] = counts["bm"]!! + 1
                         }
-                        designationLower.contains("credit officer") || designationLower.contains("senior credit officer") || designationLower.contains("co") || designationLower.contains("sco") -> {
+                        designationLower.contains("senior credit officer") || designationLower.contains("sco") -> {
+                            counts["sco"] = counts["sco"]!! + 1
+                        }
+                        designationLower.contains("credit officer") || designationLower == "co" -> {
                             counts["co"] = counts["co"]!! + 1
                         }
                     }
@@ -92,12 +111,17 @@ object BranchSummaryService {
             val allBranches = (branchCountsMap.keys + branchStaffMap.keys).distinct()
 
             return allBranches.map { branch ->
-                val counts = branchCountsMap[branch] ?: mapOf("bm" to 0, "abm" to 0, "co" to 0)
+                val counts = branchCountsMap[branch] ?: mapOf(
+                    "cm" to 0, "am" to 0, "bm" to 0, "abm" to 0, "sco" to 0, "co" to 0
+                )
                 BranchStaffSummary(
                     branchName = branch,
+                    clusterManagerCount = counts["cm"] ?: 0,
+                    areaManagerCount = counts["am"] ?: 0,
                     branchManagerCount = counts["bm"] ?: 0,
                     assistantBranchManagerCount = counts["abm"] ?: 0,
-                    creditOfficerTotalCount = counts["co"] ?: 0,
+                    seniorCreditOfficerCount = counts["sco"] ?: 0,
+                    creditOfficerCount = counts["co"] ?: 0,
                     staffList = branchStaffMap[branch] ?: emptyList()
                 )
             }.sortedBy { it.branchName }
