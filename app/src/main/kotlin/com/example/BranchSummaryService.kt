@@ -4,19 +4,28 @@ import kotlinx.serialization.Serializable
 import java.sql.Connection
 
 @Serializable
+data class StaffDetailDto(
+    val empId: String,
+    val employeeName: String,
+    val designation: String
+)
+
+@Serializable
 data class BranchStaffSummary(
     val branchName: String,
     val branchManagerCount: Int,
     val assistantBranchManagerCount: Int,
-    val creditOfficerTotalCount: Int
+    val creditOfficerTotalCount: Int,
+    val staffList: List<StaffDetailDto>
 )
 
 object BranchSummaryService {
     
-    // Active staff nkara branch-wise summary baher kariba pain function
     fun getActiveBranchSummary(getConnection: () -> Connection?): List<BranchStaffSummary> {
         val conn = getConnection() ?: return emptyList()
-        val summaryMap = mutableMapOf<String, MutableMap<String, Int>>()
+        
+        val branchStaffMap = mutableMapOf<String, MutableList<StaffDetailDto>>()
+        val branchCountsMap = mutableMapOf<String, MutableMap<String, Int>>()
 
         try {
             val stmt = conn.createStatement()
@@ -39,7 +48,6 @@ object BranchSummaryService {
                     return ""
                 }
 
-                // Check Active Status (score == 3)
                 val empStatus = getVal("emp_status_35", "emp_status")
                 val empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp")
                 val salaryStatus = getVal("salary_status")
@@ -48,25 +56,32 @@ object BranchSummaryService {
                 val s2 = if (empStatusTemp.trim() == "1" || empStatusTemp.trim().equals("active", ignoreCase = true)) 1 else 0
                 val s3 = if (salaryStatus.trim() == "1" || salaryStatus.trim().equals("active", ignoreCase = true)) 1 else 0
 
-                // Yadi active staff hie thebe
                 if ((s1 + s2 + s3) > 1) {
                     val branch = getVal("branch_name_9", "branch_name", "branch").ifBlank { "Other Branch" }
-                    val designation = getVal("designation_7", "designation").lowercase().trim()
+                    val rawDesignation = getVal("designation_7", "designation")
+                    val designationLower = rawDesignation.lowercase().trim()
+                    
+                    val empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code")
+                    val empName = getVal("employee_name_3", "employee_name")
 
-                    val branchData = summaryMap.getOrPut(branch) {
+                    branchStaffMap.getOrPut(branch) { mutableListOf() }.add(
+                        StaffDetailDto(empId = empId, employeeName = empName, designation = rawDesignation)
+                    )
+
+                    val counts = branchCountsMap.getOrPut(branch) {
                         mutableMapOf("bm" to 0, "abm" to 0, "co" to 0)
                     }
 
+                    // Sothik Krama: Prathame Assistant Branch Manager ku check karibe
                     when {
-                        designation.contains("assistant branch manager") || designation.contains("abm") -> {
-
-                            branchData["bm"] = branchData["bm"]!! + 1
+                        designationLower.contains("assistant branch manager") || designationLower.contains("abm") -> {
+                            counts["abm"] = counts["abm"]!! + 1
                         }
-			designation.contains("branch manager") || designation == "bm" -> {                        
-                            branchData["abm"] = branchData["abm"]!! + 1
+                        designationLower.contains("branch manager") || designationLower == "bm" -> {                        
+                            counts["bm"] = counts["bm"]!! + 1
                         }
-                        designation.contains("credit officer") || designation.contains("senior credit officer") || designation.contains("co") || 				designation.contains("sco") -> {
-                            branchData["co"] = branchData["co"]!! + 1
+                        designationLower.contains("credit officer") || designationLower.contains("senior credit officer") || designationLower.contains("co") || designationLower.contains("sco") -> {
+                            counts["co"] = counts["co"]!! + 1
                         }
                     }
                 }
@@ -74,12 +89,16 @@ object BranchSummaryService {
             rs.close()
             stmt.close()
 
-            return summaryMap.map { (branch, counts) ->
+            val allBranches = (branchCountsMap.keys + branchStaffMap.keys).distinct()
+
+            return allBranches.map { branch ->
+                val counts = branchCountsMap[branch] ?: mapOf("bm" to 0, "abm" to 0, "co" to 0)
                 BranchStaffSummary(
                     branchName = branch,
                     branchManagerCount = counts["bm"] ?: 0,
                     assistantBranchManagerCount = counts["abm"] ?: 0,
-                    creditOfficerTotalCount = counts["co"] ?: 0
+                    creditOfficerTotalCount = counts["co"] ?: 0,
+                    staffList = branchStaffMap[branch] ?: emptyList()
                 )
             }.sortedBy { it.branchName }
 
