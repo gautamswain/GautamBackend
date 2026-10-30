@@ -192,7 +192,7 @@ object TursoDatabaseService {
         if (branchQuery.isBlank()) return emptyList()
         val allRecords = searchRecords("") 
         return allRecords.filter { dto ->
-            val isActive = calculateStatusScore(dto) == 3
+            val isActive = calculateStatusScore(dto) > 1
             val isBranchMatch = dto.branchName.trim().lowercase().contains(branchQuery.lowercase())
             isActive && isBranchMatch
         }
@@ -202,7 +202,7 @@ object TursoDatabaseService {
         if (designationQuery.isBlank()) return emptyList()
         val allRecords = searchRecords("") 
         return allRecords.filter { dto ->
-            val isActive = calculateStatusScore(dto) == 3
+            val isActive = calculateStatusScore(dto) > 1
             val isDesignationMatch = dto.designation.trim().lowercase().contains(designationQuery.lowercase())
             isActive && isDesignationMatch
         }
