@@ -49,7 +49,7 @@ object BranchSummaryService {
                 val s3 = if (salaryStatus.trim() == "1" || salaryStatus.trim().equals("active", ignoreCase = true)) 1 else 0
 
                 // Yadi active staff hie thebe
-                if ((s1 + s2 + s3) == 3) {
+                if ((s1 + s2 + s3) > 1) {
                     val branch = getVal("branch_name_9", "branch_name", "branch").ifBlank { "Other Branch" }
                     val designation = getVal("designation_7", "designation").lowercase().trim()
 
