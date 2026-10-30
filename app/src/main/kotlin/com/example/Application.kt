@@ -130,7 +130,28 @@ fun Application.module() {
             }
         }
 
-        // 3. Google Sheets Routes
+        // 3. Google Drive Report Upload Routes
+        route("/api/drive") {
+            post("/upload-branch-summary-report") {
+                try {
+                    val fileName = GoogleDriveReportService.uploadBranchSummaryReport()
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
+            post("/upload-staff-status-report") {
+                try {
+                    val fileName = GoogleDriveReportService.uploadStaffStatusReport()
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+        }
+
+        // 4. Google Sheets Routes
         get("/api/combined-data") {
             val rawData = GoogleSheetsBackendService.readCell("Sheet1!A15")
             val fallback = "~1#1#4#No Data Found#(24-10-2026-Saturday) -> Today^0~1~2~3~4~5~6~7~8~9~10^ଆଜିର ବିବରଣୀ ଉପଲବ୍ଧ ନାହିଁ।^$DEFAULT_COLOR_PALETTE"
@@ -154,7 +175,7 @@ fun Application.module() {
             call.respond(DayDescriptionResponse(date = date, description = desc))
         }
 
-        // 4. Gemini AI Routes
+        // 5. Gemini AI Routes
         route("/api/chat") {
             get {
                 val prompt = call.request.queryParameters["prompt"] ?: "Hello Gemini"
@@ -166,7 +187,7 @@ fun Application.module() {
             }
         }
 
-        // 5. Add Event Route
+        // 6. Add Event Route
         post("/api/add-event") {
             var date = ""; var event = ""; var type = 2
             call.receiveMultipart().forEachPart { part ->

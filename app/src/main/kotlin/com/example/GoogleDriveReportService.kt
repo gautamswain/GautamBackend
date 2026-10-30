@@ -1,0 +1,95 @@
+package com.example
+
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport
+import com.google.api.client.http.InputStreamContent
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
+import com.google.api.services.drive.model.File
+import com.google.auth.http.HttpCredentialsAdapter
+import com.google.auth.oauth2.GoogleCredentials
+import java.io.ByteArrayInputStream
+
+object GoogleDriveReportService {
+    private const val APPLICATION_NAME = "AdhikarHR Drive Service"
+
+    private fun getDriveService(): Drive {
+        val credentialsJson = System.getenv("GOOGLE_CREDENTIALS_JSON1") 
+            ?: throw IllegalStateException("GOOGLE_CREDENTIALS_JSON1 environment variable not set")
+
+        val inputStream = ByteArrayInputStream(credentialsJson.toByteArray(Charsets.UTF_8))
+        val credentials = GoogleCredentials.fromStream(inputStream)
+            .createScoped(listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE))
+
+        val transport = GoogleNetHttpTransport.newTrustedTransport()
+        val jsonFactory = GsonFactory.getDefaultInstance()
+
+        return Drive.Builder(transport, jsonFactory, HttpCredentialsAdapter(credentials))
+            .setApplicationName(APPLICATION_NAME)
+            .build()
+    }
+
+    private fun getOrCreateAdhikarHrFolder(driveService: Drive): String {
+        val folderQuery = "mimeType = 'application/vnd.google-apps.folder' and name = 'AdhikarHR' and trashed = false"
+        val folderResult = driveService.files().list().setQ(folderQuery).execute()
+        return folderResult.files.firstOrNull()?.id ?: run {
+            val folderMetadata = File().apply {
+                name = "AdhikarHR"
+                mimeType = "application/vnd.google-apps.folder"
+            }
+            driveService.files().create(folderMetadata).setFields("id").execute().id
+        }
+    }
+
+    fun uploadBranchSummaryReport(): String {
+        val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
+        val reportContent = StringBuilder("Branch Name | CM | AM | BM | ABM | SCO | CO | Total\n")
+        summaryList.forEach { item ->
+            val total = item.clusterManagerCount + item.areaManagerCount + item.branchManagerCount + 
+                        item.assistantBranchManagerCount + item.seniorCreditOfficerCount + item.creditOfficerCount
+            reportContent.append("${item.branchName} | ${item.clusterManagerCount} | ${item.areaManagerCount} | ${item.branchManagerCount} | ${item.assistantBranchManagerCount} | ${item.seniorCreditOfficerCount} | ${item.creditOfficerCount} | $total\n")
+        }
+
+        val driveService = getDriveService()
+        val folderId = getOrCreateAdhikarHrFolder(driveService)
+
+        val fileMetadata = File().apply {
+            name = "Branch_Summary_Report_${System.currentTimeMillis()}.txt"
+            parents = listOf(folderId)
+        }
+        val contentStream = ByteArrayInputStream(reportContent.toString().toByteArray(Charsets.UTF_8))
+        val mediaContent = InputStreamContent("text/plain", contentStream)
+
+        val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
+            .setFields("id, name")
+            .execute()
+
+        return uploadedFile.name
+    }
+
+    fun uploadStaffStatusReport(): String {
+        val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
+        val reportContent = StringBuilder("Branch Name | Emp ID | Employee Name | Designation | Phone 1 | Phone 2\n")
+        summaryList.forEach { item ->
+            item.staffList.forEach { staff ->
+                reportContent.append("${item.branchName} | ${staff.empId} | ${staff.employeeName} | ${staff.designation} | ${staff.phoneNo1} | ${staff.phoneNo2}\n")
+            }
+        }
+
+        val driveService = getDriveService()
+        val folderId = getOrCreateAdhikarHrFolder(driveService)
+
+        val fileMetadata = File().apply {
+            name = "Staff_Status_Report_${System.currentTimeMillis()}.txt"
+            parents = listOf(folderId)
+        }
+        val contentStream = ByteArrayInputStream(reportContent.toString().toByteArray(Charsets.UTF_8))
+        val mediaContent = InputStreamContent("text/plain", contentStream)
+
+        val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
+            .setFields("id, name")
+            .execute()
+
+        return uploadedFile.name
+    }
+}
