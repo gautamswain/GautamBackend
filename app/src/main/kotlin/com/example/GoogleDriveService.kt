@@ -1,77 +1,65 @@
 package com.example.services
 
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.io.File
-
-@Serializable
-data class TokenResponse(
-    val access_token: String,
-    val expires_in: Int,
-    val token_type: String
-)
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport
+import com.google.api.client.http.InputStreamContent
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
+import com.google.api.services.drive.model.File
+import com.google.auth.http.HttpCredentialsAdapter
+import com.google.auth.oauth2.UserCredentials
+import java.io.ByteArrayInputStream
+import java.io.File as JavaFile
 
 class GoogleDriveService(
     private val clientId: String,
     private val clientSecret: String,
     private val refreshToken: String
 ) {
-    private val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            json(Json { ignoreUnknownKeys = true })
-        }
-    }
+    private val applicationName = "AdhikarHR Drive Service"
 
-    // Refresh Token ଦ୍ୱାରା ନୂଆ Access Token ଆଣିବା ପାଇଁ
-    private suspend fun getAccessToken(): String {
-        val response: HttpResponse = client.post("https://oauth2.googleapis.com/token") {
-            setBody(
-                FormDataContent(
-                    Parameters.build {
-                        append("client_id", clientId)
-                        append("client_secret", clientSecret)
-                        append("refresh_token", refreshToken)
-                        append("grant_type", "refresh_token")
-                    }
-                )
-            )
-        }
-        val tokenResponse = response.body<TokenResponse>()
-        return tokenResponse.access_token
+    private fun getDriveService(): Drive {
+        val credentials = UserCredentials.newBuilder()
+            .setClientId(clientId)
+            .setClientSecret(clientSecret)
+            .setRefreshToken(refreshToken)
+            .build()
+            .createScoped(listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE))
+
+        val transport = GoogleNetHttpTransport.newTrustedTransport()
+        val jsonFactory = GsonFactory.getDefaultInstance()
+
+        return Drive.Builder(transport, jsonFactory, HttpCredentialsAdapter(credentials))
+            .setApplicationName(applicationName)
+            .build()
     }
 
     // Google Drive ରେ ଫାଇଲ୍ ଅପ୍‌ଲୋଡ୍ କରିବା ପାଇଁ
-    suspend fun uploadFile(file: File, mimeType: String): String {
-        val accessToken = getAccessToken()
-        
-        // Google Drive Metadata
-        val metadata = "{\"name\":\"${file.name}\",\"mimeType\":\"$mimeType\"}"
+    fun uploadFile(file: JavaFile, mimeType: String): String {
+        val driveService = getDriveService()
 
-        val response = client.post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart") {
-            header(HttpHeaders.Authorization, "Bearer $accessToken")
-            setBody(
-                MultiPartFormDataContent(
-                    formData {
-                        append("metadata", metadata, Headers.build {
-                            append(HttpHeaders.ContentType, "application/json; charset=UTF-8")
-                        })
-                        append("file", file.readBytes(), Headers.build {
-                            append(HttpHeaders.ContentType, mimeType)
-                            append(HttpHeaders.ContentDisposition, "filename=\"${file.name}\"")
-                        })
-                    }
-                )
-            )
+        // ଫୋଲଡର୍ ଯାଞ୍ଚ କିମ୍ବା ତିଆରି କରିବା
+        val folderQuery = "mimeType = 'application/vnd.google-apps.folder' and name = 'AdhikarHR' and trashed = false"
+        val folderResult = driveService.files().list().setQ(folderQuery).execute()
+        val folderId = folderResult.files.firstOrNull()?.id ?: run {
+            val folderMetadata = File().apply {
+                name = "AdhikarHR"
+                mimeType = "application/vnd.google-apps.folder"
+            }
+            driveService.files().create(folderMetadata).setFields("id").execute().id
         }
 
-        return response.bodyAsText()
+        // ଫାଇଲ୍ ମେଟାଡାଟା ଏବଂ କଣ୍ଟେଣ୍ଟ୍
+        val fileMetadata = File().apply {
+            name = file.name
+            parents = listOf(folderId)
+        }
+        val mediaContent = InputStreamContent(mimeType, ByteArrayInputStream(file.readBytes()))
+
+        val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
+            .setFields("id, name")
+            .execute()
+
+        return "File uploaded successfully: ${uploadedFile.name} (ID: ${uploadedFile.id})"
     }
 }
