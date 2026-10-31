@@ -90,10 +90,7 @@ object TursoDatabaseService {
     }
 
     fun calculateStatusScore(dto: MasterDataDto): Int {
-        val s1 = if (dto.empStatus.trim() == "1" || dto.empStatus.trim().equals("active", ignoreCase = true)) 1 else 0
-        val s2 = if (dto.empStatusTemp.trim() == "1" || dto.empStatusTemp.trim().equals("active", ignoreCase = true)) 1 else 0
-        val s3 = if (dto.salaryStatus.trim() == "1" || dto.salaryStatus.trim().equals("active", ignoreCase = true)) 1 else 0
-        return s1 + s2 + s3
+        return StaffRepository.calculateStatusScore(dto)
     }
 
     fun searchRecords(query: String): List<MasterDataDto> {
@@ -110,32 +107,10 @@ object TursoDatabaseService {
             val rs = stmt.executeQuery("SELECT * FROM MasterData;")
 
             while (rs.next()) {
-                val metaData = rs.metaData
-                val count = metaData.columnCount
-                val map = mutableMapOf<String, String>()
+                // Using central StaffRepository parser
+                val dto = StaffRepository.parseMasterDataDto(rs)
 
-                for (i in 1..count) {
-                    val colName = metaData.getColumnName(i).lowercase().trim()
-                    val colValue = rs.getString(i) ?: ""
-                    map[colName] = colValue
-                }
-
-                fun getVal(vararg keys: String): String {
-                    for (key in keys) {
-                        val value = map[key.lowercase()]
-                        if (!value.isNullOrBlank()) return value
-                    }
-                    return ""
-                }
-
-                val empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code").lowercase()
-                val empName = getVal("employee_name_3", "employee_name").lowercase()
-                val phone1 = getVal("personal_contact_number_14", "personal_contact_number").lowercase()
-                val phone2 = getVal("contact_no_2_15", "contact_no_2").lowercase()
-                val branch = getVal("branch_name_9", "branch_name", "branch").lowercase()
-                val designation = getVal("designation_7", "designation").lowercase()
-
-                val searchableText = "$empId $empName $phone1 $phone2 $branch $designation"
+                val searchableText = "${dto.empId} ${dto.employeeName} ${dto.personalContactNumber} ${dto.contactNo2} ${dto.branchName} ${dto.designation}".lowercase()
 
                 var isMatch = true
                 if (searchTerms.isNotEmpty()) {
@@ -148,32 +123,6 @@ object TursoDatabaseService {
                 }
 
                 if (isMatch) {
-                    val dto = MasterDataDto(
-                        id = getVal("id"),
-                        slNo = getVal("sl_no_1", "sl_no", "slno"),
-                        empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code"),
-                        employeeName = getVal("employee_name_3", "employee_name"),
-                        fathersName = getVal("fathers_name_4", "fathers_name"),
-                        gender = getVal("gender_5", "gender"),
-                        dob = getVal("dob_6", "dob"),
-                        designation = getVal("designation_7", "designation"),
-                        department = getVal("department_8", "department"),
-                        branchName = getVal("branch_name_9", "branch_name", "branch"),
-                        dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
-                        empStatus = getVal("emp_status_35", "emp_status"),
-                        empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
-                        salaryStatus = getVal("salary_status","slary_37"),
-                        personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
-                        contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
-                        aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
-                        panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                        bankName = getVal("bank_name_19", "bank_name", "bank"),
-                        bankAccountNumber = getVal("bank_account_number_20", "bank_account_number", "ac_no"),
-                        ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name", "ifsc"),
-                        esiNo = getVal("esi_no_22", "esi_no", "esic"),
-                        epfUanNo = getVal("epf_uan_no_23", "epf_uan_no", "epf"),
-                        uanName = getVal("uan_name_24", "uan_name")
-                    )
                     resultList.add(dto)
                 }
             }
@@ -217,47 +166,7 @@ object TursoDatabaseService {
             val rs = stmt.executeQuery("SELECT * FROM MasterData ORDER BY ROWID DESC LIMIT 20;")
 
             while (rs.next()) {
-                val map = mutableMapOf<String, String>()
-                val metaData = rs.metaData
-                for (i in 1..metaData.columnCount) {
-                    val colName = metaData.getColumnName(i).lowercase().trim()
-                    map[colName] = rs.getString(i) ?: ""
-                }
-
-                fun getVal(vararg keys: String): String {
-                    for (key in keys) {
-                        val value = map[key.lowercase()]
-                        if (!value.isNullOrBlank()) return value
-                    }
-                    return ""
-                }
-
-                val dto = MasterDataDto(
-                    id = getVal("id"),
-                    slNo = getVal("sl_no_1", "sl_no", "slno"),
-                    empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code"),
-                    employeeName = getVal("employee_name_3", "employee_name"),
-                    fathersName = getVal("fathers_name_4", "fathers_name"),
-                    gender = getVal("gender_5", "gender"),
-                    dob = getVal("dob_6", "dob"),
-                    designation = getVal("designation_7", "designation"),
-                    department = getVal("department_8", "department"),
-                    branchName = getVal("branch_name_9", "branch_name", "branch"),
-                    dojInAdhikar = getVal("doj_in_adhikar_10", "doj_in_adhikar"),
-                    empStatus = getVal("emp_status_35", "emp_status"),
-                    empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp"),
-                    salaryStatus = getVal("salary_status"),
-                    personalContactNumber = getVal("personal_contact_number_14", "personal_contact_number"),
-                    contactNo2 = getVal("contact_no_2_15", "contact_no_2"),
-                    aadharCardNo = getVal("aadhar_card_no_16", "aadhar_card_no"),
-                    panCardNo = getVal("pan_card_no_17", "pan_card_no"),
-                    bankName = getVal("bank_name_19", "bank_name", "bank"),
-                    bankAccountNumber = getVal("bank_account_number_20", "bank_account_number", "ac_no"),
-                    ifscCodeBankBranchName = getVal("ifsc_code_bank_branch_name_21", "ifsc_code_bank_branch_name", "ifsc"),
-                    esiNo = getVal("esi_no_22", "esi_no", "esic"),
-                    epfUanNo = getVal("epf_uan_no_23", "epf_uan_no", "epf"),
-                    uanName = getVal("uan_name_24", "uan_name")
-                )
+                val dto = StaffRepository.parseMasterDataDto(rs)
                 resultList.add(dto)
             }
             rs.close()
@@ -271,7 +180,7 @@ object TursoDatabaseService {
         }
     }
 
-    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
+    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
         
@@ -285,15 +194,10 @@ object TursoDatabaseService {
             val stmtMaster = conn.createStatement()
             val rsMaster = stmtMaster.executeQuery("SELECT * FROM MasterData;")
             while (rsMaster.next()) {
-                val meta = rsMaster.metaData
-                val m = mutableMapOf<String, String>()
-                for (i in 1..meta.columnCount) {
-                    m[meta.getColumnName(i).lowercase().trim()] = rsMaster.getString(i) ?: ""
-                }
-                val idVal = m["emp_id_2"] ?: m["emp_id"] ?: m["empolyee_code"] ?: m["code"] ?: ""
-                if (idVal.trim().endsWith(last4Digits)) {
-                    matchedEmpId = idVal
-                    matchedEmpName = m["employee_name_3"] ?: m["employee_name"] ?: ""
+                val dto = StaffRepository.parseMasterDataDto(rsMaster)
+                if (dto.empId.trim().endsWith(last4Digits)) {
+                    matchedEmpId = dto.empId
+                    matchedEmpName = dto.employeeName
                     break
                 }
             }
@@ -301,7 +205,7 @@ object TursoDatabaseService {
             stmtMaster.close()
         } catch (_: Exception) {}
 
-        val resultList = mutableListOf<Map<String, String>>()
+        val resultList = mutableListOf>()
 
         return try {
             val stmt = conn.createStatement()
@@ -393,7 +297,7 @@ object TursoDatabaseService {
         }
     }
 
-    fun getSalaryHistoryLast20(rawEmpId: String): List<Map<String, String>> {
+    fun getSalaryHistoryLast20(rawEmpId: String): List> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
         
@@ -401,7 +305,7 @@ object TursoDatabaseService {
         val last4Digits = cleanEmpId.takeLast(4)
         val searchPattern = "%$last4Digits"
 
-        val resultList = mutableListOf<Map<String, String>>()
+        val resultList = mutableListOf>()
         
         val sql = """
             SELECT * FROM SalaryHistory 
@@ -483,14 +387,6 @@ object TursoDatabaseService {
         } finally {
             try { conn.close() } catch (_: Exception) {}
         }
-    }
-
-    private fun getVal(map: Map<String, String>, vararg keys: String): String {
-        for (key in keys) {
-            val value = map[key.lowercase()]
-            if (!value.isNullOrBlank()) return value
-        }
-        return ""
     }
 
     fun getSalaryTableColumns(): List<String> {

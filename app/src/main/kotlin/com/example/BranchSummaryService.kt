@@ -37,82 +37,35 @@ object BranchSummaryService {
             val rs = stmt.executeQuery("SELECT * FROM MasterData;")
 
             while (rs.next()) {
-                val metaData = rs.metaData
-                val count = metaData.columnCount
-                val map = mutableMapOf<String, String>()
-                for (i in 1..count) {
-                    val colName = metaData.getColumnName(i).lowercase().trim()
-                    map[colName] = rs.getString(i) ?: ""
-                }
+                // Using centralized StaffRepository parser
+                val dto = StaffRepository.parseMasterDataDto(rs)
+                val statusScore = StaffRepository.calculateStatusScore(dto)
 
-                fun getVal(vararg keys: String): String {
-                    for (key in keys) {
-                        val value = map[key.lowercase()]
-                        if (!value.isNullOrBlank()) return value
-                    }
-                    return ""
-                }
-
-                val empStatus = getVal("emp_status_35", "emp_status")
-                val empStatusTemp = getVal("emp_status_temp_36", "emp_status_temp")
-                val salaryStatus = getVal("salary_status")
-
-                val s1 = if (empStatus.trim() == "1" || empStatus.trim().equals("active", ignoreCase = true)) 1 else 0
-                val s2 = if (empStatusTemp.trim() == "1" || empStatusTemp.trim().equals("active", ignoreCase = true)) 1 else 0
-                val s3 = if (salaryStatus.trim() == "1" || salaryStatus.trim().equals("active", ignoreCase = true)) 1 else 0
-
-                if ((s1 + s2 + s3) > 1) {
-                    val branch = getVal("branch_name_9", "branch_name", "branch").ifBlank { "Other Branch" }
-                    val rawDesignation = getVal("designation_7", "designation")
-                    val designationLower = rawDesignation.lowercase().trim()
-                    
-                    val empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code")
-                    val empName = getVal("employee_name_3", "employee_name")
-                    
-                    val phone1 = getVal("personal_contact_number_14", "personal_contact_number", "contact_no_1", "phone_1")
-                    val phone2 = getVal("contact_no_2_15", "contact_no_2", "phone_2")
+                if (statusScore > 1) {
+                    val branch = dto.branchName.ifBlank { "Other Branch" }
+                    val designationLower = dto.designation.lowercase().trim()
 
                     branchStaffMap.getOrPut(branch) { mutableListOf() }.add(
                         StaffDetailDto(
-                            empId = empId, 
-                            employeeName = empName, 
-                            designation = rawDesignation,
-                            phoneNo1 = phone1,
-                            phoneNo2 = phone2
+                            empId = dto.empId, 
+                            employeeName = dto.employeeName, 
+                            designation = dto.designation,
+                            phoneNo1 = dto.personalContactNumber,
+                            phoneNo2 = dto.contactNo2
                         )
                     )
 
                     val counts = branchCountsMap.getOrPut(branch) {
-                        mutableMapOf(
-                            "cm" to 0, 
-                            "am" to 0, 
-                            "bm" to 0, 
-                            "abm" to 0, 
-                            "sco" to 0, 
-                            "co" to 0
-                        )
+                        mutableMapOf("cm" to 0, "am" to 0, "bm" to 0, "abm" to 0, "sco" to 0, "co" to 0)
                     }
 
-                    // Strict Order Sorting Mapping
                     when {
-                        designationLower.contains("cluster manager") || designationLower == "cm" -> {
-                            counts["cm"] = counts["cm"]!! + 1
-                        }
-                        designationLower.contains("area manager") || designationLower == "am" -> {
-                            counts["am"] = counts["am"]!! + 1
-                        }
-                        designationLower.contains("assistant branch manager") || designationLower.contains("abm") -> {
-                            counts["abm"] = counts["abm"]!! + 1
-                        }
-                        designationLower.contains("branch manager") || designationLower == "bm" -> {                        
-                            counts["bm"] = counts["bm"]!! + 1
-                        }
-                        designationLower.contains("senior credit officer") || designationLower.contains("senior credit manager") || designationLower.contains("sco") -> {
-                            counts["sco"] = counts["sco"]!! + 1
-                        }
-                        designationLower.contains("credit officer") || designationLower.contains("credit manager") || designationLower == "co" -> {
-                            counts["co"] = counts["co"]!! + 1
-                        }
+                        designationLower.contains("cluster manager") || designationLower == "cm" -> counts["cm"] = counts["cm"]!! + 1
+                        designationLower.contains("area manager") || designationLower == "am" -> counts["am"] = counts["am"]!! + 1
+                        designationLower.contains("assistant branch manager") || designationLower.contains("abm") -> counts["abm"] = counts["abm"]!! + 1
+                        designationLower.contains("branch manager") || designationLower == "bm" -> counts["bm"] = counts["bm"]!! + 1
+                        designationLower.contains("senior credit officer") || designationLower.contains("senior credit manager") || designationLower.contains("sco") -> counts["sco"] = counts["sco"]!! + 1
+                        designationLower.contains("credit officer") || designationLower.contains("credit manager") || designationLower == "co" -> counts["co"] = counts["co"]!! + 1
                     }
                 }
             }
@@ -122,9 +75,7 @@ object BranchSummaryService {
             val allBranches = (branchCountsMap.keys + branchStaffMap.keys).distinct()
 
             return allBranches.map { branch ->
-                val counts = branchCountsMap[branch] ?: mapOf(
-                    "cm" to 0, "am" to 0, "bm" to 0, "abm" to 0, "sco" to 0, "co" to 0
-                )
+                val counts = branchCountsMap[branch] ?: mapOf("cm" to 0, "am" to 0, "bm" to 0, "abm" to 0, "sco" to 0, "co" to 0)
                 BranchStaffSummary(
                     branchName = branch,
                     clusterManagerCount = counts["cm"] ?: 0,
