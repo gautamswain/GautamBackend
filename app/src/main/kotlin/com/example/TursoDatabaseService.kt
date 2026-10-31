@@ -180,7 +180,7 @@ object TursoDatabaseService {
         }
     }
 
-    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List> {
+    fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<Map<String, String>> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
         
@@ -205,7 +205,7 @@ object TursoDatabaseService {
             stmtMaster.close()
         } catch (_: Exception) {}
 
-        val resultList = mutableListOf>()
+        val resultList = mutableListOf<Map<String, String>>()
 
         return try {
             val stmt = conn.createStatement()
@@ -297,7 +297,7 @@ object TursoDatabaseService {
         }
     }
 
-    fun getSalaryHistoryLast20(rawEmpId: String): List> {
+    fun getSalaryHistoryLast20(rawEmpId: String): List<Map<String, String>> {
         val conn = getConnection() ?: return emptyList()
         val cleanEmpId = rawEmpId.trim()
         
@@ -305,7 +305,7 @@ object TursoDatabaseService {
         val last4Digits = cleanEmpId.takeLast(4)
         val searchPattern = "%$last4Digits"
 
-        val resultList = mutableListOf>()
+        val resultList = mutableListOf<Map<String, String>>()
         
         val sql = """
             SELECT * FROM SalaryHistory 
