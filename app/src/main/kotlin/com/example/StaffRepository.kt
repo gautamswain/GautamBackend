@@ -27,7 +27,7 @@ object StaffRepository {
         return MasterDataDto(
             id = getVal("id"),
             slNo = getVal("sl_no_1", "sl_no", "slno"),
-            empId = getVal("emp_id_2", "emp_id", "empolyee_code", "code"),
+            empId = getVal("code_2", "emp_id", "empolyee_code", "code"),
             employeeName = getVal("employee_name_3", "employee_name"),
             fathersName = getVal("fathers_name_4", "fathers_name"),
             gender = getVal("gender_5", "gender"),
