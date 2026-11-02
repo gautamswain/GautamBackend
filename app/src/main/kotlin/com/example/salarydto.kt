@@ -1,0 +1,43 @@
+import java.sql.ResultSet
+
+fun parseSalaryDto(rs: ResultSet): SalaryDto {
+    return SalaryDto(
+        id = rs.getString("id") ?: "",
+        month = rs.getString("month") ?: "",
+        slNo1 = rs.getString("sl_no_1") ?: "",
+        empId2 = rs.getString("emp_id_2") ?: "",
+        employeeName3 = rs.getString("employee_name_3") ?: "",
+        designation7 = rs.getString("designation_7") ?: "",
+        department8 = rs.getString("department_8") ?: "",
+        branchName9 = rs.getString("branch_name_9") ?: "",
+        portfolio7 = rs.getString("portfolio_7") ?: "",
+        paidDays8 = rs.getString("paid_days_8") ?: "",
+        basicDa9 = rs.getString("basic_da_9") ?: "",
+        hra10 = rs.getString("hra_10") ?: "",
+        conveyance11 = rs.getString("conveyance_11") ?: "",
+        medicalAllowance12 = rs.getString("medical_allowance_12") ?: "",
+        educationAllowance13 = rs.getString("education_allowance_13") ?: "",
+        lunchCanteenAllowance14 = rs.getString("lunch_canteen_allownance_14") ?: "",
+        specialAllowance15 = rs.getString("special_allowance_15") ?: "",
+        hraVariable39 = rs.getString("hravariable_39") ?: "",
+        otherAllowance17 = rs.getString("other_allowance_17") ?: "",
+        daAosa40 = rs.getString("daaosa_40") ?: "",
+        arrearsIncrement41 = rs.getString("arrears_increment_41") ?: "",
+        epf5549 = rs.getString("epf55_49") ?: "",
+        esi5650 = rs.getString("esi56_50") ?: "",
+        professionalTax22 = rs.getString("professional_tax_22") ?: "",
+        tds42 = rs.getString("tds_42") ?: "",
+        staffLoan43 = rs.getString("staff_loan_43") ?: "",
+        staffAdvance44 = rs.getString("staff_advance_44") ?: "",
+        others45 = rs.getString("others_45") ?: "",
+        otherEarnings46 = rs.getString("other_earnings_46") ?: "",
+        grossEarnings28 = rs.getString("gross_earnings_28") ?: "",
+        grossDeductions29 = rs.getString("gross_deductions_29") ?: "",
+        netAmount30 = rs.getString("net_amount_30") ?: "",
+        status00 = rs.getString("status_00") ?: "",
+        bankAccountNumber20 = rs.getString("bank_account_number_20") ?: "",
+        ifscCodeBankBranchName21 = rs.getString("ifsc_code_bank_branch_name_21") ?: "",
+        bankName19 = rs.getString("bank_name_19") ?: "",
+        backSalaryGive = rs.getString("backsalarygive") ?: ""
+    )
+}
