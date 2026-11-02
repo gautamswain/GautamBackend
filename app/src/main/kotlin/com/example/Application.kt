@@ -93,6 +93,46 @@ fun Application.module() {
                 }
             }
 
+            // ସିଧାସଳଖ ID (ଯେପରିକି 001) ଦେଇ ସେଲାରୀ ଡେଟା ଖୋଜିବା ପାଇଁ API
+            get("/salary-by-id/{id}") {
+                val idParam = call.parameters["id"]
+                if (idParam.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id parameter"))
+                    return@get
+                }
+
+                val conn = TursoDatabaseService.getConnection()
+                if (conn == null) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+                    return@get
+                }
+
+                try {
+                    val stmt = conn.createStatement()
+                    val rs = stmt.executeQuery("SELECT * FROM SalaryHistory;")
+                    var foundDto: SalaryDto? = null
+
+                    while (rs.next()) {
+                        val dto = parseSalaryDto(rs)
+                        if (dto.id.trim() == idParam.trim() || dto.slNo1.trim() == idParam.trim()) {
+                            foundDto = dto
+                            break
+                        }
+                    }
+                    rs.close()
+                    stmt.close()
+                    conn.close()
+
+                    if (foundDto != null) {
+                        call.respond(foundDto)
+                    } else {
+                        call.respond(HttpStatusCode.NotFound, mapOf("error" to "Salary record not found for ID: $idParam"))
+                    }
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
             get("/search") {
                 val rawQuery = call.request.queryParameters["query"] 
                     ?: call.request.queryParameters["name"]
@@ -147,7 +187,7 @@ fun Application.module() {
             }
         }
 
-        // 3. Google Drive Report Upload Routes (GET କରାଗଲା ଯათେ ବ୍ରାଉଜର୍‌ରୁ ସିଧାସଳଖ ଟେଷ୍ଟ୍ ହୋଇପାରିବ)
+        // 3. Google Drive Report Upload Routes
         route("/api/drive") {
             get("/upload-branch-summary-report") {
                 try {
