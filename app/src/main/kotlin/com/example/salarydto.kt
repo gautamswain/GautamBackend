@@ -1,4 +1,46 @@
+package com.example
+
 import java.sql.ResultSet
+
+data class SalaryDto(
+    val id: String,
+    val month: String,
+    val slNo1: String,
+    val empId2: String,
+    val employeeName3: String,
+    val designation7: String,
+    val department8: String,
+    val branchName9: String,
+    val portfolio7: String,
+    val paidDays8: String,
+    val basicDa9: String,
+    val hra10: String,
+    val conveyance11: String,
+    val medicalAllowance12: String,
+    val educationAllowance13: String,
+    val lunchCanteenAllowance14: String,
+    val specialAllowance15: String,
+    val hraVariable39: String,
+    val otherAllowance17: String,
+    val daAosa40: String,
+    val arrearsIncrement41: String,
+    val epf5549: String,
+    val esi5650: String,
+    val professionalTax22: String,
+    val tds42: String,
+    val staffLoan43: String,
+    val staffAdvance44: String,
+    val others45: String,
+    val otherEarnings46: String,
+    val grossEarnings28: String,
+    val grossDeductions29: String,
+    val netAmount30: String,
+    val status00: String,
+    val bankAccountNumber20: String,
+    val ifscCodeBankBranchName21: String,
+    val bankName19: String,
+    val backSalaryGive: String
+)
 
 fun parseSalaryDto(rs: ResultSet): SalaryDto {
     return SalaryDto(
