@@ -29,23 +29,17 @@ fun Route.configureSalaryRoutes() {
         }
 
         try {
-            // 2. Dynamic 'IN' clause banaba (e.g., WHERE id IN (?, ?, ?, ?, ?))
-            val placeholders = last20Ids.joinToString(",") { "?" }
-            val query = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
+            // 2. Pratyeka ID pain independent query execute kariba (JDBC IN clause parameter binding issues avoid kariba pain eha sabutharu safe o reliable aTE)
+            val pstmt = conn.prepareStatement("SELECT * FROM SalaryHistory WHERE id = ?")
             
-            val pstmt = conn.prepareStatement(query)
-            
-            // Pratyeka ID ku dynamically bind kariba
-            for (i in last20Ids.indices) {
-                pstmt.setString(i + 1, last20Ids[i])
+            for (id in last20Ids) {
+                pstmt.setString(1, id)
+                val rs = pstmt.executeQuery()
+                while (rs.next()) {
+                    results.add(parseSalaryDto(rs))
+                }
+                rs.close()
             }
-            
-            val rs = pstmt.executeQuery()
-            while (rs.next()) {
-                results.add(parseSalaryDto(rs))
-            }
-            
-            rs.close()
             pstmt.close()
             conn.close()
 
