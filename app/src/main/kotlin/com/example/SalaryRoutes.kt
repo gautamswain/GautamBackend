@@ -25,12 +25,12 @@ fun Route.configureSalaryRoutes() {
         }
 
         try {
-            val pstmt = conn.prepareStatement("SELECT * FROM SalaryHistory WHERE id = ? OR sl_no_1 = ?")
+            // Kevala exact 'id' anukul query kariba, 'sl_no_1' hata diyaigala
+            val pstmt = conn.prepareStatement("SELECT * FROM SalaryHistory WHERE id = ?")
             for (id in last20Ids) {
                 pstmt.setString(1, id)
-                pstmt.setString(2, id)
                 val rs = pstmt.executeQuery()
-                if (rs.next()) {
+                while (rs.next()) { // Multiple rows safety pain while loop use heigala
                     results.add(parseSalaryDto(rs))
                 }
                 rs.close()
