@@ -9,7 +9,6 @@ fun Route.configureSalaryRoutes() {
     get("/api/turso/salaries-batch") {
         val historyParam = call.request.queryParameters["history"] ?: ""
         
-        // 1. Split and extract last 20 IDs
         val last20Ids = historyParam.split("~")
             .map { it.trim() }
             .filter { it.isNotBlank() && it != "0" }
@@ -29,17 +28,21 @@ fun Route.configureSalaryRoutes() {
         }
 
         try {
-            // 2. Pratyeka ID pain independent query execute kariba (JDBC IN clause parameter binding issues avoid kariba pain eha sabutharu safe o reliable aTE)
-            val pstmt = conn.prepareStatement("SELECT * FROM SalaryHistory WHERE id = ?")
+            // Dynamic IN clause banaba taaki sabu IDs gudaika gotei query re execute heibe
+            val placeholders = last20Ids.joinToString(",") { "?" }
+            val query = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
             
-            for (id in last20Ids) {
-                pstmt.setString(1, id)
-                val rs = pstmt.executeQuery()
-                while (rs.next()) {
-                    results.add(parseSalaryDto(rs))
-                }
-                rs.close()
+            val pstmt = conn.prepareStatement(query)
+            for (i in last20Ids.indices) {
+                pstmt.setString(i + 1, last20Ids[i])
             }
+            
+            val rs = pstmt.executeQuery()
+            while (rs.next()) {
+                results.add(parseSalaryDto(rs))
+            }
+            
+            rs.close()
             pstmt.close()
             conn.close()
 
