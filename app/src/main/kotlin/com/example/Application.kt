@@ -93,7 +93,7 @@ fun Application.module() {
                 }
             }
 
-            // ସିଧାସଳଖ ID (ଯେପରିକି 001) ଦେଇ ସେଲାରୀ ଡେଟା ଖୋଜିବା ପାଇଁ API
+            // ସିଧାସଳଖ ID (ଯେପରିକି 001) ଦେଇ ସେଲାରୀ ଡେଟା ଖୋଜିବା ପାଇଁ Optimized API
             get("/salary-by-id/{id}") {
                 val idParam = call.parameters["id"]
                 if (idParam.isNullOrBlank()) {
@@ -108,19 +108,18 @@ fun Application.module() {
                 }
 
                 try {
-                    val stmt = conn.createStatement()
-                    val rs = stmt.executeQuery("SELECT * FROM SalaryHistory;")
-                    var foundDto: SalaryDto? = null
+                    val preparedStatement = conn.prepareStatement("SELECT * FROM SalaryHistory WHERE id = ? OR sl_no_1 = ?")
+                    preparedStatement.setString(1, idParam.trim())
+                    preparedStatement.setString(2, idParam.trim())
+                    val rs = preparedStatement.executeQuery()
 
-                    while (rs.next()) {
-                        val dto = parseSalaryDto(rs)
-                        if (dto.id.trim() == idParam.trim() || dto.slNo1.trim() == idParam.trim()) {
-                            foundDto = dto
-                            break
-                        }
+                    var foundDto: SalaryDto? = null
+                    if (rs.next()) {
+                        foundDto = parseSalaryDto(rs)
                     }
+
                     rs.close()
-                    stmt.close()
+                    preparedStatement.close()
                     conn.close()
 
                     if (foundDto != null) {

@@ -219,14 +219,14 @@ object TursoDatabaseService {
         val sql = "SELECT * FROM SalaryHistory WHERE LOWER(emp_id_2) LIKE LOWER(?) ORDER BY rowid DESC LIMIT 20;"
 
         try {
-            val pstmt = conn.prepareStatement(sql)
-            pstmt.setString(1, searchPattern)
-            val rs = pstmt.executeQuery()
+            val preparedStatement = conn.prepareStatement(sql)
+            preparedStatement.setString(1, searchPattern)
+            val rs = preparedStatement.executeQuery()
             while (rs.next()) {
                 resultList.add(parseSalaryDto(rs))
             }
             rs.close()
-            pstmt.close()
+            preparedStatement.close()
             return resultList.reversed()
         } catch (e: Exception) {
             logger.error("Error fetching salary history: ${e.message}", e)
