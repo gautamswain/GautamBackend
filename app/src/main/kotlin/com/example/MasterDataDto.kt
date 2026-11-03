@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 data class MasterDataDto(
     @SerialName("id") val id: String = "",
     @SerialName("sl_no") val slNo: String = "",
-    @SerialName("code") val empId: String = "",
+    @SerialName("code_2") val empId: String = "",
     @SerialName("employee_name") val employeeName: String = "",
     @SerialName("fathers_name") val fathersName: String = "",
     @SerialName("gender") val gender: String = "",
