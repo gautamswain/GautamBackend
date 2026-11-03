@@ -1,7 +1,9 @@
 package com.example
+
 import kotlinx.serialization.Serializable
 import java.sql.ResultSet
 
+@Serializable // 👈 Ehi annotation ti class upare nischaya rakhibe
 data class SalaryDto(
     val id: String,
     val month: String,
