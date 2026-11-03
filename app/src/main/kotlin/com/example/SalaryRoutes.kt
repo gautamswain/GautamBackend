@@ -46,18 +46,24 @@ private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
     val conn = TursoDatabaseService.getConnection()
         ?: throw IllegalStateException("Database connection failed")
 
-    val byId = LinkedHashMap<String, SalaryDto>()
+    val results = mutableListOf<SalaryDto>()
     conn.use {
-        it.createStatement().use { stmt ->
-            stmt.executeQuery("SELECT * FROM SalaryHistory").use { rs ->
-                while (rs.next()) {
-                    val dto = parseSalaryDto(rs)
-                    if (ids.contains(dto.id)) {
-                        byId[dto.id] = dto
+        val sql = "SELECT * FROM SalaryHistory WHERE id = ? OR sl_no_1 = ?"
+        it.prepareStatement(sql).use { pstmt ->
+            for (id in ids) {
+                val cleanId = id.trim()
+                pstmt.setString(1, cleanId)
+                pstmt.setString(2, cleanId)
+                pstmt.executeQuery().use { rs ->
+                    while (rs.next()) {
+                        results.add(parseSalaryDto(rs))
                     }
                 }
             }
         }
     }
-    return ids.mapNotNull(byId::get)   // preserves original history order, drops missing rows
+    
+    // Maintain original history order and remove duplicates if any
+    val byId = results.associateBy { it.id }
+    return ids.mapNotNull(byId::get)
 }
