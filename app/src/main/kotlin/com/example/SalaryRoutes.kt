@@ -43,23 +43,18 @@ fun Route.configureSalaryRoutes() {
 private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
     if (ids.isEmpty()) return emptyList()
 
-    val placeholders = ids.joinToString(",") { "?" }
-    val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
-
     val conn = TursoDatabaseService.getConnection()
         ?: throw IllegalStateException("Database connection failed")
 
     val byId = LinkedHashMap<String, SalaryDto>()
     conn.use {
-        it.prepareStatement(sql).use { pstmt ->
-            ids.forEachIndexed { i, id ->
-                // Turso/SQLite TEXT id mapping pain setString use koraigala
-                pstmt.setString(i + 1, id)
-            }
-            pstmt.executeQuery().use { rs ->
+        it.createStatement().use { stmt ->
+            stmt.executeQuery("SELECT * FROM SalaryHistory").use { rs ->
                 while (rs.next()) {
                     val dto = parseSalaryDto(rs)
-                    byId[dto.id] = dto
+                    if (ids.contains(dto.id)) {
+                        byId[dto.id] = dto
+                    }
                 }
             }
         }
