@@ -93,7 +93,7 @@ fun Application.module() {
                 }
             }
 
-            // ସିଧାସଳଖ ID (ଯେପରିକି 001) ଦେଇ ସେଲାରୀ ଡେଟା ଖୋଜିବା ପାଇଁ Optimized API
+            // ସିଧାସଳଖ ID ଦେଇ ସେଲାରୀ ଡେଟା ଖୋଜିବା ପାଇଁ Optimized API
             get("/salary-by-id/{id}") {
                 val idParam = call.parameters["id"]
                 if (idParam.isNullOrBlank()) {
@@ -127,6 +127,43 @@ fun Application.module() {
                     } else {
                         call.respond(HttpStatusCode.NotFound, mapOf("error" to "Salary record not found for ID: $idParam"))
                     }
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
+            // Salary History Batch API - Full history string ru last 20ti ID extract kari data pathaibapain
+            get("/salaries-batch") {
+                val historyParam = call.request.queryParameters["history"] ?: ""
+                
+                val last20Ids = historyParam.split("~")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() && it != "0" }
+                    .takeLast(20)
+
+                val conn = TursoDatabaseService.getConnection()
+                if (conn == null) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+                    return@get
+                }
+
+                try {
+                    val results = mutableListOf<SalaryDto>()
+                    val pstmt = conn.prepareStatement("SELECT * FROM SalaryHistory WHERE id = ? OR sl_no_1 = ?")
+
+                    for (id in last20Ids) {
+                        pstmt.setString(1, id)
+                        pstmt.setString(2, id)
+                        val rs = pstmt.executeQuery()
+                        if (rs.next()) {
+                            results.add(parseSalaryDto(rs))
+                        }
+                        rs.close()
+                    }
+                    pstmt.close()
+                    conn.close()
+
+                    call.respond(results)
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
                 }
