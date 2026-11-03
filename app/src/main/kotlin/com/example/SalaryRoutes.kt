@@ -53,12 +53,8 @@ private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
     conn.use {
         it.prepareStatement(sql).use { pstmt ->
             ids.forEachIndexed { i, id ->
-                val longId = id.toLongOrNull()
-                if (longId != null) {
-                    pstmt.setLong(i + 1, longId)   // Handles integer IDs correctly in IN clauses
-                } else {
-                    pstmt.setString(i + 1, id)
-                }
+                // Turso/SQLite re id column TEXT thibaru setString use koraigala taaki IN clause sabu IDs match karipariba
+                pstmt.setString(i + 1, id)
             }
             pstmt.executeQuery().use { rs ->
                 while (rs.next()) {
