@@ -1,54 +1,69 @@
-package com.example // ba apanankara sothik package name
+package com.example
 
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.ktor.http.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private const val MAX_BATCH = 20
 
 fun Route.configureSalaryRoutes() {
     get("/api/turso/salaries-batch") {
-        val historyParam = call.request.queryParameters["history"] ?: ""
-        
-        val last20Ids = historyParam.split("~")
+        val lastIds = call.request.queryParameters["history"].orEmpty()
+            .split('~')
             .map { it.trim() }
             .filter { it.isNotBlank() && it != "0" }
-            .takeLast(20)
-        
-        if (last20Ids.isEmpty()) {
-            call.respond(emptyList<SalaryDto>())
+            .distinct()
+            .takeLast(MAX_BATCH)
+
+        if (lastIds.isEmpty()) {
+            call.respond(HttpStatusCode.OK, emptyList<SalaryDto>())
             return@get
         }
 
-        val results = mutableListOf<SalaryDto>()
-        
-        val conn = TursoDatabaseService.getConnection()
-        if (conn == null) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
-            return@get
+        val payload = withContext(Dispatchers.IO) {
+            try {
+                fetchSalaries(lastIds)
+            } catch (e: Exception) {
+                application.log.error("salaries-batch failed for ${lastIds.size} ids", e)
+                null
+            }
         }
 
-        try {
-            // Dynamic IN clause banaba taaki sabu IDs gudaika gotei query re execute heibe
-            val placeholders = last20Ids.joinToString(",") { "?" }
-            val query = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
-            
-            val pstmt = conn.prepareStatement(query)
-            for (i in last20Ids.indices) {
-                pstmt.setString(i + 1, last20Ids[i])
-            }
-            
-            val rs = pstmt.executeQuery()
-            while (rs.next()) {
-                results.add(parseSalaryDto(rs))
-            }
-            
-            rs.close()
-            pstmt.close()
-            conn.close()
+        if (payload == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "query_failed"))
+            return@get
+        }
+        call.respond(HttpStatusCode.OK, payload)   // order matches history
+    }
+}
 
-            call.respond(results)
-        } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
+    val placeholders = ids.joinToString(",") { "?" }
+    val sql = """
+        SELECT id, employee_id, month, year, gross, deductions, net
+        FROM SalaryHistory
+        WHERE id IN ($placeholders)
+    """.trimIndent()
+
+    val conn = TursoDatabaseService.getConnection()
+        ?: throw IllegalStateException("Database connection failed")
+
+    val byId = HashMap<String, SalaryDto>(ids.size)
+    conn.use {
+        it.prepareStatement(sql).use { pstmt ->
+            ids.forEachIndexed { i, id ->
+                pstmt.setString(i + 1, id)   // setLong if id is INTEGER
+            }
+            pstmt.executeQuery().use { rs ->
+                while (rs.next()) {
+                    val dto = parseSalaryDto(rs)
+                    byId[dto.id] = dto
+                }
+            }
         }
     }
+    return ids.mapNotNull(byId::get)   // preserve order, drop deleted rows
 }
