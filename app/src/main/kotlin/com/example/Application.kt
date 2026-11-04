@@ -55,6 +55,8 @@ fun Application.module() {
             call.respondText("Welcome to Ktor Backend!") 
         }
 
+        newJoiningRouting()
+
         // Test Drive Upload Endpoint
         get("/upload-test") {
             try {

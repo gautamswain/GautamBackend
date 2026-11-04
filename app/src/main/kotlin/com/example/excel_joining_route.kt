@@ -73,6 +73,6 @@ fun Route.newJoiningRouting() {
         }
 
         // Return the parsed list of NewJMasterDto to the Android app
-        call.respond<List<NewJMasterDto>>(HttpStatusCode.OK, employeeList)
+        call.respond(HttpStatusCode.OK, employeeList)
     }
 }
