@@ -6,7 +6,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.http.content.*
 import io.ktor.http.*
-import org.apache.poi.ss.usermodel.CellType
+import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import java.io.InputStream
 
@@ -14,6 +14,7 @@ fun Route.newJoiningRouting() {
     post("/api/turso/upload-new-joining") {
         val multipart = call.receiveMultipart()
         val employeeList = mutableListOf<NewJMasterDto>()
+        val formatter = DataFormatter()
 
         multipart.forEachPart { part ->
             when (part) {
@@ -25,18 +26,10 @@ fun Route.newJoiningRouting() {
                     
                     fun getCellString(row: org.apache.poi.ss.usermodel.Row, index: Int): String {
                         val cell = row.getCell(index) ?: return ""
-                        return when (cell.cellType) {
-                            CellType.STRING -> cell.stringCellValue.trim()
-                            CellType.NUMERIC -> {
-                                val num = cell.numericCellValue
-                                if (num == num.toLong().toDouble()) num.toLong().toString() else num.toString()
-                            }
-                            CellType.BOOLEAN -> cell.booleanCellValue.toString()
-                            else -> ""
-                        }
+                        return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Excel sheet re row index 2 ru headers pare data start heuchhi (row index 3 ru)
+                    // Row index 3 ru data start heuchhi (headers drop kariki)
                     for (row in sheet.drop(3)) {
                         val empName = getCellString(row, 1) // Emp Name column index 1
                         
