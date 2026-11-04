@@ -58,6 +58,10 @@ dependencies {
     implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
     implementation("com.google.api-client:google-api-client:2.2.0")
 
+// Apache POI for Excel (.xls and .xlsx) reading
+    implementation("org.apache.poi:poi:5.2.5")
+    implementation("org.apache.poi:poi-ooxml:5.2.5")
+
 }
 
 tasks.register("stage") {
