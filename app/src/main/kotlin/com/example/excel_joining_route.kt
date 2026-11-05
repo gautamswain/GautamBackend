@@ -29,17 +29,19 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Row 4 ru row 10 parjanta read karibapain (index 3 ru drop kari take(7) rows)
-                    for (row in sheet.drop(3).take(7)) {
-                        val empName = getCellString(row, 1) // Emp Name column index 1
+                    // Row 1 ru row 10 parjanta read karibapain (index 0 ru take(10) rows)
+                    for (row in sheet.take(10)) {
+                        val slNo = getCellString(row, 0)
+                        val empName = getCellString(row, 1)
                         
-                        / Debug log to check exact cell values in Render logs
-                        println("Row Debug -> Sl.No: '$slNo', Emp Name: '$empName'")
+                        // Debug log to check row values in Render logs
+                        println("Row Check -> Sl.No: '$slNo', Emp Name: '$empName'")
 
-                        if (empName.isNotBlank()) {
+                        // Check if Sl.No is a valid number/present and Emp Name is not blank
+                        if (slNo.isNotBlank() && empName.isNotBlank() && slNo.lowercase() != "sl.no") {
                             val dto = NewJMasterDto(
-                                slNo = getCellString(row, 0),
-                                empName = getCellString(row, 1),
+                                slNo = slNo,
+                                empName = empName,
                                 fathersName = getCellString(row, 2),
                                 dob = getCellString(row, 3),
                                 designation = getCellString(row, 4),
