@@ -29,8 +29,8 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Row index 3 ru data start heuchhi (headers drop kariki)
-                    for (row in sheet.drop(3)) {
+                    // Only take row 4 to row 10 (index 3 to 9, total 7 rows)
+                    for (row in sheet.drop(3).take(7)) {
                         val empName = getCellString(row, 1) // Emp Name column index 1
                         
                         if (empName.isNotBlank()) {
@@ -72,7 +72,6 @@ fun Route.newJoiningRouting() {
             part.dispose()
         }
 
-        // Return the parsed list of NewJMasterDto to the Android app
         call.respond(HttpStatusCode.OK, employeeList)
     }
 }
