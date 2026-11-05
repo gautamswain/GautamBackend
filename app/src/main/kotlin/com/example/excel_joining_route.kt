@@ -36,7 +36,7 @@ fun Route.newJoiningRouting() {
                         if (empName.isNotBlank()) {
                             val dto = NewJMasterDto(
                                 slNo = getCellString(row, 0),
-                                empName = empName,
+                                empName = getCellString(row, 1),
                                 fathersName = getCellString(row, 2),
                                 dob = getCellString(row, 3),
                                 designation = getCellString(row, 4),
