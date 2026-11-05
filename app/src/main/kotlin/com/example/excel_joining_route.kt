@@ -33,8 +33,8 @@ fun Route.newJoiningRouting() {
                     for (row in sheet.drop(3).take(7)) {
                         val empName = getCellString(row, 1) // Emp Name column index 1
                         
-                        // Debug log to check rows in server console
-                        println("Reading row - Emp Name: $empName")
+                        / Debug log to check exact cell values in Render logs
+                        println("Row Debug -> Sl.No: '$slNo', Emp Name: '$empName'")
 
                         if (empName.isNotBlank()) {
                             val dto = NewJMasterDto(
