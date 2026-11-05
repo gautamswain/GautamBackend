@@ -29,10 +29,13 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Only take row 4 to row 10 (index 3 to 9, total 7 rows)
+                    // Row 4 ru row 10 parjanta read karibapain (index 3 ru drop kari take(7) rows)
                     for (row in sheet.drop(3).take(7)) {
                         val empName = getCellString(row, 1) // Emp Name column index 1
                         
+                        // Debug log to check rows in server console
+                        println("Reading row - Emp Name: $empName")
+
                         if (empName.isNotBlank()) {
                             val dto = NewJMasterDto(
                                 slNo = getCellString(row, 0),
