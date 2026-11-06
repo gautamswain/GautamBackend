@@ -17,6 +17,10 @@ data class ComprehensiveVerificationReport(
     val panMessage: String,
     val isAadharValid: Boolean,
     val aadharMessage: String,
+    val isAccountValid: Boolean,
+    val accountMessage: String,
+    val isIfscValid: Boolean,
+    val ifscMessage: String,
     val isDobValid: Boolean,
     val dobMessage: String,
     val isDojValid: Boolean,
@@ -81,22 +85,29 @@ fun Route.employeeVerificationRoute() {
 
             val empName = jsonElement["emp_name"]?.jsonPrimitive?.content ?: ""
             val fathersName = jsonElement["fathers_name"]?.jsonPrimitive?.content ?: ""
-            val dob = jsonElement["dob"]?.jsonPrimitive?.content ?: ""
-            val doj = jsonElement["doj_in_adhikar"]?.jsonPrimitive?.content ?: jsonElement["doj"]?.jsonPrimitive?.content ?: ""
-            val panNo = jsonElement["pan_no"]?.jsonPrimitive?.content ?: ""
-            val aadharNo = jsonElement["aadhar_no"]?.jsonPrimitive?.content ?: ""
-            val accountNo = jsonElement["account_no"]?.jsonPrimitive?.content ?: ""
+            val rawDob = jsonElement["dob"]?.jsonPrimitive?.content ?: ""
+            val rawDoj = jsonElement["doj_in_adhikar"]?.jsonPrimitive?.content ?: jsonElement["doj"]?.jsonPrimitive?.content ?: ""
+            val rawPan = jsonElement["pan_no"]?.jsonPrimitive?.content ?: ""
+            val rawAadhar = jsonElement["aadhar_no"]?.jsonPrimitive?.content ?: ""
+            val rawAccount = jsonElement["account_no"]?.jsonPrimitive?.content ?: ""
+            val rawIfsc = jsonElement["ifsc_code"]?.jsonPrimitive?.content ?: jsonElement["ifsc"]?.jsonPrimitive?.content ?: ""
             val contactNo = jsonElement["contact_no"]?.jsonPrimitive?.content ?: ""
             val contactNo2 = jsonElement["contactno2"]?.jsonPrimitive?.content ?: ""
 
+            // Clean special characters, spaces, and invisible symbols from inputs
+            val cleanPan = rawPan.replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase()
+            val cleanAadhar = rawAadhar.replace(Regex("[^0-9]"), "").trim()
+            val cleanAccount = rawAccount.replace(Regex("[^0-9]"), "").trim()
+            val cleanIfsc = rawIfsc.replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase()
+            val cleanDob = rawDob.replace(Regex("[^0-9-/.]"), "").trim()
+            val cleanDoj = rawDoj.replace(Regex("[^0-9-/.]"), "").trim()
+
             // 1. PAN Validation
             val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
-            val cleanPan = panNo.trim().uppercase()
             val isPanValid = cleanPan.length == 10 && panRegex.matches(cleanPan)
             val panMessage = if (isPanValid) "PAN format and length are valid." else "Invalid PAN format or length (Must be 10 characters: AAAAA9999A)."
 
             // 2. Aadhaar Validation with Verhoeff Checksum ([Aadhaar Redacted])
-            val cleanAadhar = aadharNo.replace(Regex("\\s+"), "").trim()
             val isAadharValid = VerhoeffValidator.isValid(cleanAadhar)
             val aadharMessage = if (isAadharValid) {
                 "Aadhaar number and checksum combination are valid."
@@ -106,31 +117,39 @@ fun Route.employeeVerificationRoute() {
                 "Invalid Aadhaar number combination (checksum failed)."
             }
 
-            // 3. DOB Validation
+            // 3. Bank Account Validation (9 to 18 digits)
+            val accountRegex = Regex("^[0-9]{9,18}$")
+            val isAccountValid = accountRegex.matches(cleanAccount)
+            val accountMessage = if (isAccountValid) "Bank account number format and length are valid." else "Invalid bank account number (Must be 9 to 18 digits)."
+
+            // 4. IFSC Code Validation (4 letters, 0, 6 alphanumeric characters)
+            val ifscRegex = Regex("^[A-Z]{4}0[A-Z0-9]{6}$")
+            val isIfscValid = ifscRegex.matches(cleanIfsc)
+            val ifscMessage = if (isIfscValid) "IFSC code format is valid." else "Invalid IFSC code format (e.g., SBIN0001234)."
+
+            // 5. DOB Validation
             var isDobValid = false
-            val dobString = dob.trim()
-            for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"))) {
+            for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"), DateTimeFormatter.ofPattern("dd.MM.yyyy"))) {
                 try {
-                    LocalDate.parse(dobString, formatter)
+                    LocalDate.parse(cleanDob, formatter)
                     isDobValid = true
                     break
                 } catch (_: DateTimeParseException) {}
             }
             val dobMessage = if (isDobValid) "Date of Birth format is valid." else "Invalid Date of Birth format."
 
-            // 4. DOJ Validation
+            // 6. DOJ Validation
             var isDojValid = false
-            val dojString = doj.trim()
-            for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"))) {
+            for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"), DateTimeFormatter.ofPattern("dd.MM.yyyy"))) {
                 try {
-                    LocalDate.parse(dojString, formatter)
+                    LocalDate.parse(cleanDoj, formatter)
                     isDojValid = true
                     break
                 } catch (_: DateTimeParseException) {}
             }
             val dojMessage = if (isDojValid) "Date of Joining format is valid." else "Invalid Date of Joining format."
 
-            // 5. Turso MasterData Duplicate Check (Using exact DB schema column names with suffixes)
+            // 7. Turso MasterData Duplicate Check (Using exact DB schema column names with suffixes)
             val conn = TursoDatabaseService.getConnection()
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
@@ -148,7 +167,7 @@ fun Route.employeeVerificationRoute() {
                     val pstmt = conn.prepareStatement(query)
                     pstmt.setString(1, cleanPan)
                     pstmt.setString(2, cleanAadhar)
-                    pstmt.setString(3, accountNo.trim())
+                    pstmt.setString(3, cleanAccount)
                     pstmt.setString(4, contactNo.trim())
                     pstmt.setString(5, contactNo2.trim())
                     pstmt.setString(6, contactNo.trim())
@@ -172,10 +191,10 @@ fun Route.employeeVerificationRoute() {
                         if (cleanPan.isNotBlank() && cleanPan.equals(dbPan, ignoreCase = true)) {
                             matchedFields.add("PAN Number")
                         }
-                        if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("\\s+"), "")) {
+                        if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("[^0-9]"), "")) {
                             matchedFields.add("Aadhaar Number ([Aadhaar Redacted])")
                         }
-                        if (accountNo.isNotBlank() && accountNo.trim() == dbAccount.trim()) {
+                        if (cleanAccount.isNotBlank() && cleanAccount == dbAccount.trim()) {
                             matchedFields.add("Bank Account Number")
                         }
                         if (contactNo.isNotBlank() && (contactNo.trim() == dbPhone1.trim() || contactNo.trim() == dbPhone2.trim())) {
@@ -187,7 +206,7 @@ fun Route.employeeVerificationRoute() {
                         if (fathersName.isNotBlank() && fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) {
                             matchedFields.add("Father's Name")
                         }
-                        if (dob.isNotBlank() && dob.trim() == dbDob.trim()) {
+                        if (cleanDob.isNotBlank() && cleanDob == dbDob.trim()) {
                             matchedFields.add("Date of Birth")
                         }
 
@@ -212,7 +231,7 @@ fun Route.employeeVerificationRoute() {
 
             val summary = buildString {
                 append(if (matchedRecords.isNotEmpty()) "Duplicate Warning: Found ${matchedRecords.size} matching record(s) in MasterData. " else "No duplicate records found in MasterData. ")
-                append(if (isPanValid && isAadharValid && isDobValid && isDojValid) "All formats are valid." else "Some format validations failed.")
+                append(if (isPanValid && isAadharValid && isAccountValid && isIfscValid && isDobValid && isDojValid) "All formats are valid." else "Some format validations failed.")
             }
 
             val report = ComprehensiveVerificationReport(
@@ -221,6 +240,10 @@ fun Route.employeeVerificationRoute() {
                 panMessage = panMessage,
                 isAadharValid = isAadharValid,
                 aadharMessage = aadharMessage,
+                isAccountValid = isAccountValid,
+                accountMessage = accountMessage,
+                isIfscValid = isIfscValid,
+                ifscMessage = ifscMessage,
                 isDobValid = isDobValid,
                 dobMessage = dobMessage,
                 isDojValid = isDojValid,
