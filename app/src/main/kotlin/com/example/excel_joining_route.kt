@@ -22,30 +22,27 @@ fun Route.newJoiningRouting() {
 
         // Helper function to clean, validate, and standardize date format to yyyy-MM-dd
         fun cleanAndFormatDate(rawDate: String): String {
-            val cleanStr = rawDate.replace(Regex("[^0-9-/.]"), "").trim()
-            if (cleanStr.isBlank()) return rawDate.trim()
+            val cleanStr = rawDate.trim()
+            if (cleanStr.isBlank()) return ""
             
             val formatters = listOf(
+                DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("dd/MMM/yy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("dd/MMM/yyyy", Locale.ENGLISH),
                 DateTimeFormatter.ISO_LOCAL_DATE,
                 DateTimeFormatter.ofPattern("dd-MM-yyyy"),
                 DateTimeFormatter.ofPattern("dd/MM/yyyy"),
-                DateTimeFormatter.ofPattern("dd.MM.yyyy"),
-                DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH),
-                DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
-                DateTimeFormatter.ofPattern("yyyy-MM-dd")
+                DateTimeFormatter.ofPattern("dd.MM.yyyy")
             )
             
             for (fmt in formatters) {
-                try {
-                    val parsedDate = LocalDate.parse(rawDate.trim(), fmt)
-                    return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE) // Returns YYYY-MM-DD
-                } catch (_: DateTimeParseException) {}
                 try {
                     val parsedDate = LocalDate.parse(cleanStr, fmt)
                     return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE) // Returns YYYY-MM-DD
                 } catch (_: DateTimeParseException) {}
             }
-            return rawDate.trim()
+            return rawDate.trim() // Fallback if unrecognized
         }
 
         multipart.forEachPart { part ->
