@@ -78,7 +78,7 @@ fun Route.employeeVerificationRoute() {
             }
             val dojMessage = if (isDojValid) "Date of Joining format is valid." else "Invalid Date of Joining format."
 
-            // 5. Turso MasterData Duplicate Check
+            // 5. Turso MasterData Duplicate Check (Using correct column names: pan_no, aadhar_no, account_no, contact_no)
             val conn = TursoDatabaseService.getConnection()
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
@@ -86,11 +86,11 @@ fun Route.employeeVerificationRoute() {
                 try {
                     val query = """
                         SELECT * FROM MasterData 
-                        WHERE (pan_card_no IS NOT NULL AND pan_card_no != '' AND pan_card_no = ?) 
-                           OR (aadhar_card_no IS NOT NULL AND aadhar_card_no != '' AND aadhar_card_no = ?) 
-                           OR (bank_account_number IS NOT NULL AND bank_account_number != '' AND bank_account_number = ?) 
-                           OR (personal_contact_number IS NOT NULL AND personal_contact_number != '' AND (personal_contact_number = ? OR personal_contact_number = ?))
-                           OR (contact_no_2 IS NOT NULL AND contact_no_2 != '' AND (contact_no_2 = ? OR contact_no_2 = ?))
+                        WHERE (pan_no IS NOT NULL AND pan_no != '' AND pan_no = ?) 
+                           OR (aadhar_no IS NOT NULL AND aadhar_no != '' AND aadhar_no = ?) 
+                           OR (account_no IS NOT NULL AND account_no != '' AND account_no = ?) 
+                           OR (contact_no IS NOT NULL AND contact_no != '' AND (contact_no = ? OR contact_no = ?))
+                           OR (contactno2 IS NOT NULL AND contactno2 != '' AND (contactno2 = ? OR contactno2 = ?))
                     """
                     
                     val pstmt = conn.prepareStatement(query)
@@ -104,16 +104,16 @@ fun Route.employeeVerificationRoute() {
 
                     val rs = pstmt.executeQuery()
                     while (rs.next()) {
-                        val dbEmpId = rs.getString("emp_id") ?: ""
-                        val dbEmpName = rs.getString("employee_name") ?: ""
+                        val dbEmpId = rs.getString("emp_id") ?: rs.getString("id") ?: ""
+                        val dbEmpName = rs.getString("emp_name") ?: rs.getString("employee_name") ?: ""
                         val dbFatherName = rs.getString("fathers_name") ?: ""
                         val dbBranch = rs.getString("branch_name") ?: ""
                         val dbDob = rs.getString("dob") ?: ""
-                        val dbPan = rs.getString("pan_card_no") ?: ""
-                        val dbAadhar = rs.getString("aadhar_card_no") ?: ""
-                        val dbAccount = rs.getString("bank_account_number") ?: ""
-                        val dbPhone1 = rs.getString("personal_contact_number") ?: ""
-                        val dbPhone2 = rs.getString("contact_no_2") ?: ""
+                        val dbPan = rs.getString("pan_no") ?: ""
+                        val dbAadhar = rs.getString("aadhar_no") ?: ""
+                        val dbAccount = rs.getString("account_no") ?: ""
+                        val dbPhone1 = rs.getString("contact_no") ?: ""
+                        val dbPhone2 = rs.getString("contactno2") ?: ""
 
                         val matchedFields = mutableListOf<String>()
 
