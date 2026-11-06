@@ -22,8 +22,7 @@ fun Route.newJoiningRouting() {
         val employeeList = mutableListOf<NewJMasterDto>()
         val formatter = DataFormatter()
 
-        // Helper function to clean, validate, and standardize date format to yyyy-MM-dd
-        // Uses DateTimeFormatterBuilder with a pivot of 1950 so 2-digit years like '91 become 1991 instead of 2091
+        // Helper function to clean, validate, and standardize date format to yyyy-MM-dd with 1950 year pivot
         fun cleanAndFormatDate(rawDate: String): String {
             val cleanStr = rawDate.trim()
             if (cleanStr.isBlank()) return ""
@@ -62,7 +61,16 @@ fun Route.newJoiningRouting() {
                     return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE) // Returns YYYY-MM-DD
                 } catch (_: DateTimeParseException) {}
             }
-            return rawDate.trim() // Fallback if unrecognized
+            return rawDate.trim()
+        }
+
+        // Helper to clean address strings from Excel/VBA inputs
+        fun cleanAddress(rawAddress: String): String {
+            return rawAddress.replace("\r\n", ", ")
+                .replace("\n", ", ")
+                .replace("\r", ", ")
+                .replace(Regex("\\s+"), " ")
+                .trim()
         }
 
         multipart.forEachPart { part ->
@@ -105,8 +113,8 @@ fun Route.newJoiningRouting() {
                                 areaName = getCellString(row, 6),
                                 dojInAdhikar = cleanAndFormatDate(rawDojAdhikar),
                                 dojInBranch = cleanAndFormatDate(rawDojBranch),
-                                presentAddress = getCellString(row, 9),
-                                permanentAddress = getCellString(row, 10),
+                                presentAddress = cleanAddress(getCellString(row, 9)),
+                                permanentAddress = cleanAddress(getCellString(row, 10)),
                                 education = getCellString(row, 11),
                                 contactNo = getCellString(row, 12),
                                 aadharNo = cleanAadhar,
