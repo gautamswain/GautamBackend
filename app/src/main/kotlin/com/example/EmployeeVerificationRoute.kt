@@ -44,23 +44,22 @@ fun Route.employeeVerificationRoute() {
 
             // 1. PAN Validation (Length 10, Format: 5 Letters, 4 Numbers, 1 Letter)
             val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
-            val cleanPan = newEmp.panNo.trim().uppercase()
+            val cleanPan = (newEmp.panNo ?: "").trim().uppercase()
             val isPanValid = cleanPan.length == 10 && panRegex.matches(cleanPan)
             val panMessage = if (isPanValid) "PAN format and length are valid." else "Invalid PAN format or length (Must be 10 characters: AAAAA9999A)."
 
-            // 2. Aadhaar Validation (Length 12 digits numeric - [Aadhaar Redacted])
-            val cleanAadhar = newEmp.aadharNo.replace(Regex("\\s+"), "").trim()
+            // 2. Aadhaar Validation (Length 12 digits numeric)
+            val cleanAadhar = (newEmp.aadharNo ?: "").replace(Regex("\\s+"), "").trim()
             val aadharRegex = Regex("^[0-9]{12}$")
             val isAadharValid = cleanAadhar.length == 12 && aadharRegex.matches(cleanAadhar)
             val aadharMessage = if (isAadharValid) "Aadhaar format and length are valid." else "Invalid Aadhaar format or length (Must be 12 digits)."
 
             // 3. DOB Validation Format Check (Accepts YYYY-MM-DD or DD-MM-YYYY)
             var isDobValid = false
-            var parsedDob: LocalDate? = null
-            val dobString = newEmp.dob.trim()
+            val dobString = (newEmp.dob ?: "").trim()
             for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"))) {
                 try {
-                    parsedDob = LocalDate.parse(dobString, formatter)
+                    LocalDate.parse(dobString, formatter)
                     isDobValid = true
                     break
                 } catch (_: DateTimeParseException) {}
@@ -69,7 +68,7 @@ fun Route.employeeVerificationRoute() {
 
             // 4. DOJ Validation Format Check
             var isDojValid = false
-            val dojString = newEmp.dojInAdhikar.trim()
+            val dojString = (newEmp.dojInAdhikar ?: "").trim()
             for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"))) {
                 try {
                     LocalDate.parse(dojString, formatter)
@@ -84,76 +83,79 @@ fun Route.employeeVerificationRoute() {
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
             if (conn != null) {
-                val query = """
-                    SELECT * FROM MasterData 
-                    WHERE (pan_card_no IS NOT NULL AND pan_card_no != '' AND pan_card_no = ?) 
-                       OR (aadhar_card_no IS NOT NULL AND aadhar_card_no != '' AND aadhar_card_no = ?) 
-                       OR (bank_account_number IS NOT NULL AND bank_account_number != '' AND bank_account_number = ?) 
-                       OR (personal_contact_number IS NOT NULL AND personal_contact_number != '' AND (personal_contact_number = ? OR personal_contact_number = ?))
-                       OR (contact_no_2 IS NOT NULL AND contact_no_2 != '' AND (contact_no_2 = ? OR contact_no_2 = ?))
-                """
-                
-                val pstmt = conn.prepareStatement(query)
-                pstmt.setString(1, cleanPan)
-                pstmt.setString(2, cleanAadhar)
-                pstmt.setString(3, newEmp.accountNo.trim())
-                pstmt.setString(4, newEmp.contactNo.trim())
-                pstmt.setString(5, newEmp.contactno2.trim())
-                pstmt.setString(6, newEmp.contactNo.trim())
-                pstmt.setString(7, newEmp.contactno2.trim())
+                try {
+                    val query = """
+                        SELECT * FROM MasterData 
+                        WHERE (pan_card_no IS NOT NULL AND pan_card_no != '' AND pan_card_no = ?) 
+                           OR (aadhar_card_no IS NOT NULL AND aadhar_card_no != '' AND aadhar_card_no = ?) 
+                           OR (bank_account_number IS NOT NULL AND bank_account_number != '' AND bank_account_number = ?) 
+                           OR (personal_contact_number IS NOT NULL AND personal_contact_number != '' AND (personal_contact_number = ? OR personal_contact_number = ?))
+                           OR (contact_no_2 IS NOT NULL AND contact_no_2 != '' AND (contact_no_2 = ? OR contact_no_2 = ?))
+                    """
+                    
+                    val pstmt = conn.prepareStatement(query)
+                    pstmt.setString(1, cleanPan)
+                    pstmt.setString(2, cleanAadhar)
+                    pstmt.setString(3, (newEmp.accountNo ?: "").trim())
+                    pstmt.setString(4, (newEmp.contactNo ?: "").trim())
+                    pstmt.setString(5, (newEmp.contactno2 ?: "").trim())
+                    pstmt.setString(6, (newEmp.contactNo ?: "").trim())
+                    pstmt.setString(7, (newEmp.contactno2 ?: "").trim())
 
-                val rs = pstmt.executeQuery()
-                while (rs.next()) {
-                    val dbEmpId = rs.getString("emp_id") ?: ""
-                    val dbEmpName = rs.getString("employee_name") ?: ""
-                    val dbFatherName = rs.getString("fathers_name") ?: ""
-                    val dbBranch = rs.getString("branch_name") ?: ""
-                    val dbDob = rs.getString("dob") ?: ""
-                    val dbPan = rs.getString("pan_card_no") ?: ""
-                    val dbAadhar = rs.getString("aadhar_card_no") ?: ""
-                    val dbAccount = rs.getString("bank_account_number") ?: ""
-                    val dbPhone1 = rs.getString("personal_contact_number") ?: ""
-                    val dbPhone2 = rs.getString("contact_no_2") ?: ""
+                    val rs = pstmt.executeQuery()
+                    while (rs.next()) {
+                        val dbEmpId = rs.getString("emp_id") ?: ""
+                        val dbEmpName = rs.getString("employee_name") ?: ""
+                        val dbFatherName = rs.getString("fathers_name") ?: ""
+                        val dbBranch = rs.getString("branch_name") ?: ""
+                        val dbDob = rs.getString("dob") ?: ""
+                        val dbPan = rs.getString("pan_card_no") ?: ""
+                        val dbAadhar = rs.getString("aadhar_card_no") ?: ""
+                        val dbAccount = rs.getString("bank_account_number") ?: ""
+                        val dbPhone1 = rs.getString("personal_contact_number") ?: ""
+                        val dbPhone2 = rs.getString("contact_no_2") ?: ""
 
-                    val matchedFields = mutableListOf<String>()
+                        val matchedFields = mutableListOf<String>()
 
-                    if (cleanPan.isNotBlank() && cleanPan.equals(dbPan, ignoreCase = true)) {
-                        matchedFields.add("PAN Number")
-                    }
-                    if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("\\s+"), "")) {
-                        matchedFields.add("Aadhaar Number ([Aadhaar Redacted])")
-                    }
-                    if (newEmp.accountNo.isNotBlank() && newEmp.accountNo.trim() == dbAccount.trim()) {
-                        matchedFields.add("Bank Account Number")
-                    }
-                    if (newEmp.contactNo.isNotBlank() && (newEmp.contactNo.trim() == dbPhone1.trim() || newEmp.contactNo.trim() == dbPhone2.trim())) {
-                        matchedFields.add("Phone Number 1")
-                    }
-                    if (newEmp.contactno2.isNotBlank() && (newEmp.contactno2.trim() == dbPhone1.trim() || newEmp.contactno2.trim() == dbPhone2.trim())) {
-                        matchedFields.add("Phone Number 2")
-                    }
-                    if (newEmp.fathersName.isNotBlank() && newEmp.fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) {
-                        matchedFields.add("Father's Name")
-                    }
-                    if (newEmp.dob.isNotBlank() && newEmp.dob.trim() == dbDob.trim()) {
-                        matchedFields.add("Date of Birth")
-                    }
+                        if (cleanPan.isNotBlank() && cleanPan.equals(dbPan, ignoreCase = true)) {
+                            matchedFields.add("PAN Number")
+                        }
+                        if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("\\s+"), "")) {
+                            matchedFields.add("Aadhaar Number")
+                        }
+                        if (!newEmp.accountNo.isNullOrBlank() && newEmp.accountNo.trim() == dbAccount.trim()) {
+                            matchedFields.add("Bank Account Number")
+                        }
+                        if (!newEmp.contactNo.isNullOrBlank() && (newEmp.contactNo.trim() == dbPhone1.trim() || newEmp.contactNo.trim() == dbPhone2.trim())) {
+                            matchedFields.add("Phone Number 1")
+                        }
+                        if (!newEmp.contactno2.isNullOrBlank() && (newEmp.contactno2.trim() == dbPhone1.trim() || newEmp.contactno2.trim() == dbPhone2.trim())) {
+                            matchedFields.add("Phone Number 2")
+                        }
+                        if (!newEmp.fathersName.isNullOrBlank() && newEmp.fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) {
+                            matchedFields.add("Father's Name")
+                        }
+                        if (!newEmp.dob.isNullOrBlank() && newEmp.dob.trim() == dbDob.trim()) {
+                            matchedFields.add("Date of Birth")
+                        }
 
-                    if (matchedFields.isNotEmpty()) {
-                        matchedRecords.add(
-                            MatchedDatabaseRecord(
-                                empId = dbEmpId,
-                                employeeName = dbEmpName,
-                                fathersName = dbFatherName,
-                                branchName = dbBranch,
-                                matchedFields = matchedFields
+                        if (matchedFields.isNotEmpty()) {
+                            matchedRecords.add(
+                                MatchedDatabaseRecord(
+                                    empId = dbEmpId,
+                                    employeeName = dbEmpName,
+                                    fathersName = dbFatherName,
+                                    branchName = dbBranch,
+                                    matchedFields = matchedFields
+                                )
                             )
-                        )
+                        }
                     }
+                    rs.close()
+                    pstmt.close()
+                } finally {
+                    conn.close()
                 }
-                rs.close()
-                pstmt.close()
-                conn.close()
             }
 
             val summary = buildString {
@@ -162,7 +164,7 @@ fun Route.employeeVerificationRoute() {
             }
 
             val report = ComprehensiveVerificationReport(
-                employeeName = newEmp.empName,
+                employeeName = newEmp.empName ?: "Unknown",
                 isPanValid = isPanValid,
                 panMessage = panMessage,
                 isAadharValid = isAadharValid,
@@ -179,7 +181,15 @@ fun Route.employeeVerificationRoute() {
 
             call.respond(HttpStatusCode.OK, report)
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Verification process failed")))
+            e.printStackTrace()
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf(
+                    "error" to (e.localizedMessage ?: "Verification process failed"),
+                    "exception" to e.javaClass.simpleName,
+                    "details" to (e.stackTraceToString().take(500))
+                )
+            )
         }
     }
 }
