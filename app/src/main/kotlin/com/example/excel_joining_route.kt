@@ -9,12 +9,44 @@ import io.ktor.http.*
 import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import java.io.InputStream
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.util.Locale
 
 fun Route.newJoiningRouting() {
     post("/api/turso/upload-new-joining") {
         val multipart = call.receiveMultipart()
         val employeeList = mutableListOf<NewJMasterDto>()
         val formatter = DataFormatter()
+
+        // Helper function to clean, validate, and standardize date format to yyyy-MM-dd
+        fun cleanAndFormatDate(rawDate: String): String {
+            val cleanStr = rawDate.replace(Regex("[^0-9-/.]"), "").trim()
+            if (cleanStr.isBlank()) return rawDate.trim()
+            
+            val formatters = listOf(
+                DateTimeFormatter.ISO_LOCAL_DATE,
+                DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+                DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+                DateTimeFormatter.ofPattern("dd.MM.yyyy"),
+                DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("yyyy-MM-dd")
+            )
+            
+            for (fmt in formatters) {
+                try {
+                    val parsedDate = LocalDate.parse(rawDate.trim(), fmt)
+                    return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE) // Returns YYYY-MM-DD
+                } catch (_: DateTimeParseException) {}
+                try {
+                    val parsedDate = LocalDate.parse(cleanStr, fmt)
+                    return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE) // Returns YYYY-MM-DD
+                } catch (_: DateTimeParseException) {}
+            }
+            return rawDate.trim()
+        }
 
         multipart.forEachPart { part ->
             when (part) {
@@ -39,25 +71,35 @@ fun Route.newJoiningRouting() {
 
                         // Check if Sl.No is a valid number/present and Emp Name is not blank
                         if (slNo.isNotBlank() && empName.isNotBlank() && slNo.lowercase() != "sl.no") {
+                            val rawAadhar = getCellString(row, 13)
+                            val rawAccount = getCellString(row, 16)
+                            val rawDob = getCellString(row, 3)
+                            val rawDojAdhikar = getCellString(row, 7)
+                            val rawDojBranch = getCellString(row, 8)
+
+                            // Remove special characters and spaces from Aadhaar and Bank Account Number
+                            val cleanAadhar = rawAadhar.replace(Regex("[^0-9]"), "").trim()
+                            val cleanAccount = rawAccount.replace(Regex("[^0-9]"), "").trim()
+
                             val dto = NewJMasterDto(
                                 slNo = slNo,
                                 empName = empName,
                                 fathersName = getCellString(row, 2),
-                                dob = getCellString(row, 3),
+                                dob = cleanAndFormatDate(rawDob),
                                 designation = getCellString(row, 4),
                                 branchName = getCellString(row, 5),
                                 areaName = getCellString(row, 6),
-                                dojInAdhikar = getCellString(row, 7),
-                                dojInBranch = getCellString(row, 8),
+                                dojInAdhikar = cleanAndFormatDate(rawDojAdhikar),
+                                dojInBranch = cleanAndFormatDate(rawDojBranch),
                                 presentAddress = getCellString(row, 9),
                                 permanentAddress = getCellString(row, 10),
                                 education = getCellString(row, 11),
                                 contactNo = getCellString(row, 12),
-                                aadharNo = getCellString(row, 13),
-                                panNo = getCellString(row, 14),
+                                aadharNo = cleanAadhar,
+                                panNo = getCellString(row, 14).replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase(),
                                 bankName = getCellString(row, 15),
-                                accountNo = getCellString(row, 16),
-                                ifscCode = getCellString(row, 17),
+                                accountNo = cleanAccount,
+                                ifscCode = getCellString(row, 17).replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase(),
                                 esi = getCellString(row, 18),
                                 uanNo = getCellString(row, 19),
                                 gender = getCellString(row, 20),
