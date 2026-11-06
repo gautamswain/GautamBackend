@@ -47,7 +47,7 @@ fun Application.module() {
         json() 
     }
 
-    // CORS Configuration (ଯାହାଫଳରେ Web browser ବା HTML ଫାଇଲ୍‌ରୁ ରିକ୍ଵେଷ୍ଟ୍ ଆସିଲେ ବ୍ଲକ୍ ହେବ ନାହିଁ)
+    // CORS Configuration
     install(CORS) {
         anyHost()
         allowHeader(HttpHeaders.ContentType)
@@ -71,6 +71,7 @@ fun Application.module() {
 
         newJoiningRouting()
         employeeVerificationRoute()
+        commentsQueueRoute() // Registered queue route for adding verified employees to Comments table
 
         // Test Drive Upload Endpoint
         get("/upload-test") {
@@ -110,7 +111,6 @@ fun Application.module() {
                 }
             }
 
-            // ସିଧାସଳଖ ID ଦେଇ ସେଲାରୀ ଡେଟା ଖୋଜିବା ପାଇଁ Optimized API
             get("/salary-by-id/{id}") {
                 val idParam = call.parameters["id"]
                 if (idParam.isNullOrBlank()) {
@@ -149,7 +149,6 @@ fun Application.module() {
                 }
             }
 
-            // Salary History Batch API - Full history string ru last 20ti ID extract kari data pathaibapain
             get("/salaries-batch") {
                 val historyParam = call.request.queryParameters["history"] ?: ""
                 
