@@ -18,10 +18,14 @@ fun Route.commentsQueueRoute() {
                 return@post
             }
 
-            val jsonElement = Json.parseToJsonElement(bodyText).jsonObject
+            val jsonElement = try {
+                Json.parseToJsonElement(bodyText).jsonObject
+            } catch (e: Exception) {
+                null
+            }
 
-            val slNo = jsonElement["sl_no"]?.jsonPrimitive?.content 
-                ?: jsonElement["slNo"]?.jsonPrimitive?.content 
+            val slNo = jsonElement?.get("sl_no"]?.jsonPrimitive?.content 
+                ?: jsonElement?.get("slNo"]?.jsonPrimitive?.content 
                 ?: "1"
             
             val separator = "NewJ"
@@ -35,7 +39,7 @@ fun Route.commentsQueueRoute() {
             }
 
             try {
-                // Ensure Comments table exists
+                // 1. Ensure Comments table exists
                 val createTableQuery = """
                     CREATE TABLE IF NOT EXISTS Comments (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,39 +51,38 @@ fun Route.commentsQueueRoute() {
                 """
                 conn.createStatement().execute(createTableQuery)
 
-                // Insert record
+                // 2. Insert record using execute() instead of executeUpdate() for LibSQL JDBC driver compatibility
                 val insertQuery = "INSERT INTO Comments (Slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
                 conn.prepareStatement(insertQuery).use { pstmt ->
                     pstmt.setString(1, slNo)
                     pstmt.setString(2, separator)
                     pstmt.setString(3, jsonDetails)
                     pstmt.setString(4, wefDate)
-                    pstmt.executeUpdate()
+                    pstmt.execute() // <--- Fixed from executeUpdate() to execute()
                 }
 
                 call.respond(HttpStatusCode.OK, mapOf("success" to true, "message" to "Successfully added to queue!"))
-            } catch (dbEx: Exception) {
+            } catch (dbEx: Throwable) {
                 dbEx.printStackTrace()
                 call.respond(
                     HttpStatusCode.InternalServerError,
                     mapOf(
-                        "error" to (dbEx.localizedMessage ?: "Database execution failed"),
-                        "exception" to dbEx.javaClass.name,
-                        "stackTrace" to dbEx.stackTraceToString().take(400)
+                        "error" to (dbEx.localizedMessage ?: "Database error"),
+                        "exception" to dbEx.javaClass.name
                     )
                 )
             } finally {
                 try {
                     conn.close()
-                } catch (_: Exception) {}
+                } catch (_: Throwable) {}
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
             call.respond(
                 HttpStatusCode.InternalServerError,
                 mapOf(
-                    "error" to (e.localizedMessage ?: "Failed to process request"),
-                    "exception" to e.javaClass.name
+                    "error" to (t.localizedMessage ?: "Server error"),
+                    "exception" to t.javaClass.name
                 )
             )
         }
