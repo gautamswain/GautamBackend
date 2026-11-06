@@ -34,6 +34,12 @@ data class ComprehensiveVerificationReport(
     val isDojValid: Boolean,
     val dojMessage: String,
     val dojStatusIcon: String, // "👍" or "👎"
+    val isBranchValid: Boolean,
+    val branchMessage: String,
+    val branchStatusIcon: String, // "👍" or "👎"
+    val isDesignationValid: Boolean,
+    val designationMessage: String,
+    val designationStatusIcon: String, // "👍" or "👎"
     val hasDuplicates: Boolean,
     val duplicateStatusIcon: String, // "👍" or "👎"
     val totalMatches: Int,
@@ -101,6 +107,8 @@ fun Route.employeeVerificationRoute() {
             val rawAadhar = jsonElement["aadhar_no"]?.jsonPrimitive?.content ?: jsonElement["aadharNo"]?.jsonPrimitive?.content ?: ""
             val rawAccount = jsonElement["account_no"]?.jsonPrimitive?.content ?: jsonElement["accountNo"]?.jsonPrimitive?.content ?: ""
             val rawIfsc = jsonElement["ifsc_code"]?.jsonPrimitive?.content ?: jsonElement["ifscCode"]?.jsonPrimitive?.content ?: jsonElement["ifsc"]?.jsonPrimitive?.content ?: ""
+            val rawBranch = jsonElement["branch_name"]?.jsonPrimitive?.content ?: jsonElement["branchName"]?.jsonPrimitive?.content ?: ""
+            val rawDesignation = jsonElement["designation"]?.jsonPrimitive?.content ?: ""
             val contactNo = jsonElement["contact_no"]?.jsonPrimitive?.content ?: jsonElement["contactNo"]?.jsonPrimitive?.content ?: ""
             val contactNo2 = jsonElement["contactno2"]?.jsonPrimitive?.content ?: ""
 
@@ -111,6 +119,8 @@ fun Route.employeeVerificationRoute() {
             val cleanIfsc = rawIfsc.replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase()
             val cleanDob = rawDob.trim()
             val cleanDoj = rawDoj.trim()
+            val cleanBranch = rawBranch.trim()
+            val cleanDesignation = rawDesignation.trim()
 
             // 1. PAN Validation
             val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
@@ -177,8 +187,56 @@ fun Route.employeeVerificationRoute() {
             val isDojValid = isValidDate(cleanDoj)
             val dojMessage = if (isDojValid) "Date of Joining format is valid." else "Invalid Date of Joining format."
 
-            // 7. Turso MasterData Duplicate Check
+            // Fetch DB Master lists for Branch and Designation verification
+            val dbBranches = mutableSetOf<String>()
+            val dbDesignations = mutableSetOf<String>()
             val conn = TursoDatabaseService.getConnection()
+
+            if (conn != null) {
+                try {
+                    // Load BranchDetails
+                    val branchStmt = conn.prepareStatement("SELECT branchnmae FROM BranchDetails")
+                    val branchRs = branchStmt.executeQuery()
+                    while (branchRs.next()) {
+                        val b = branchRs.getString("branchnmae") ?: branchRs.getString(1)
+                        if (!b.isNullOrBlank()) dbBranches.add(b.trim().lowercase())
+                    }
+                    branchRs.close()
+                    branchStmt.close()
+
+                    // Load Designations
+                    val desigStmt = conn.prepareStatement("SELECT designation FROM Designation")
+                    val desigRs = desigStmt.executeQuery()
+                    while (desigRs.next()) {
+                        val d = desigRs.getString("designation") ?: desigRs.getString(1)
+                        if (!d.isNullOrBlank()) dbDesignations.add(d.trim().lowercase())
+                    }
+                    desigRs.close()
+                    desigStmt.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            // 7. Branch Name Matching Validation
+            val normalizedBranch = cleanBranch.lowercase()
+            val isBranchValid = cleanBranch.isNotBlank() && (dbBranches.isEmpty() || dbBranches.contains(normalizedBranch))
+            val branchMessage = if (isBranchValid) {
+                "Branch name '$cleanBranch' is valid and matches master records."
+            } else {
+                "Branch mismatch error: '$cleanBranch' does not exist in BranchDetails master data."
+            }
+
+            // 8. Designation Matching Validation
+            val normalizedDesignation = cleanDesignation.lowercase()
+            val isDesignationValid = cleanDesignation.isNotBlank() && (dbDesignations.isEmpty() || dbDesignations.contains(normalizedDesignation))
+            val designationMessage = if (isDesignationValid) {
+                "Designation '$cleanDesignation' is valid and matches master records."
+            } else {
+                "Designation mismatch error: '$cleanDesignation' does not exist in Designation master data."
+            }
+
+            // 9. Turso MasterData Duplicate Check
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
             if (conn != null) {
@@ -258,9 +316,11 @@ fun Route.employeeVerificationRoute() {
             }
 
             val hasDuplicates = matchedRecords.isNotEmpty()
+            val allValid = isPanValid && isAadharValid && isAccountValid && isIfscValid && isDobValid && isDojValid && isBranchValid && isDesignationValid && !hasDuplicates
+
             val summary = buildString {
                 append(if (hasDuplicates) "Duplicate Warning: Found ${matchedRecords.size} matching record(s) in MasterData. " else "No duplicate records found in MasterData. ")
-                append(if (isPanValid && isAadharValid && isAccountValid && isIfscValid && isDobValid && isDojValid && !hasDuplicates) "All formats are valid and no duplicates found." else "Some format validations failed or duplicates detected.")
+                append(if (allValid) "All formats and master entity checks are valid." else "Format validation failures or branch/designation mismatches detected.")
             }
 
             val report = ComprehensiveVerificationReport(
@@ -283,6 +343,12 @@ fun Route.employeeVerificationRoute() {
                 isDojValid = isDojValid,
                 dojMessage = dojMessage,
                 dojStatusIcon = if (isDojValid) "👍" else "👎",
+                isBranchValid = isBranchValid,
+                branchMessage = branchMessage,
+                branchStatusIcon = if (isBranchValid) "👍" else "👎",
+                isDesignationValid = isDesignationValid,
+                designationMessage = designationMessage,
+                designationStatusIcon = if (isDesignationValid) "👍" else "👎",
                 hasDuplicates = hasDuplicates,
                 duplicateStatusIcon = if (!hasDuplicates) "👍" else "👎",
                 totalMatches = matchedRecords.size,

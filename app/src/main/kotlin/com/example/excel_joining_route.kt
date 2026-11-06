@@ -16,11 +16,121 @@ import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoField
 import java.util.Locale
 
+data class DesignationEntity(
+    val slno: String,
+    val designation: String,
+    val tier: String,
+    val degcode: String,
+    val department: String,
+    val shtcode: String
+)
+
+object MasterDataRepository {
+    // Fetch official branch names dynamically from BranchDetails table (`branchnmae` column)
+    fun getOfficialBranches(): List<String> {
+        val branchList = mutableListOf<String>()
+        val conn = TursoDatabaseService.getConnection()
+        if (conn != null) {
+            try {
+                val pstmt = conn.prepareStatement("SELECT branchnmae FROM BranchDetails")
+                val rs = pstmt.executeQuery()
+                while (rs.next()) {
+                    val bName = rs.getString("branchnmae") ?: rs.getString(1)
+                    if (!bName.isNullOrBlank()) {
+                        branchList.add(bName.trim())
+                    }
+                }
+                rs.close()
+                pstmt.close()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                conn.close()
+            }
+        }
+        
+        // Fallback list if DB connection fails or table is empty
+        if (branchList.isEmpty()) {
+            return listOf(
+                "Barpali", "Sohela", "Padampur", "Kesinga", "Tarbha", "Th.Rampur", "Koraput", "Kotpad",
+                "Semeliguda", "Mathili", "Ambadola", "Rayagada", "Karanjia", "Keonjhar", "Ghatagaon",
+                "Anandpur", "Raikia", "Baliguda", "Phulbani", "Kamarda", "Agarapada", "Bhadrak",
+                "Chandikhol", "Chhatia", "Haripur", "Jajpur Town", "Salepur", "Adaspur", "Banki",
+                "Baranga", "Kandarpur", "Phulanakhara", "Balakati", "Puri", "Sakhigopal", "Balugaon",
+                "Malkangiri", "Kalampur"
+            )
+        }
+        return branchList
+    }
+
+    // Fetch official designations dynamically from Designation table
+    fun getOfficialDesignations(): List<DesignationEntity> {
+        val list = mutableListOf<DesignationEntity>()
+        val conn = TursoDatabaseService.getConnection()
+        if (conn != null) {
+            try {
+                val pstmt = conn.prepareStatement("SELECT Designationslno, designation, tier, degcode, department, shtcode FROM Designation")
+                val rs = pstmt.executeQuery()
+                while (rs.next()) {
+                    list.add(
+                        DesignationEntity(
+                            slno = rs.getString("Designationslno") ?: rs.getString(1) ?: "",
+                            designation = rs.getString("designation") ?: rs.getString(2) ?: "",
+                            tier = rs.getString("tier") ?: rs.getString(3) ?: "",
+                            degcode = rs.getString("degcode") ?: rs.getString(4) ?: "",
+                            department = rs.getString("department") ?: rs.getString(5) ?: "",
+                            shtcode = rs.getString("shtcode") ?: rs.getString(6) ?: ""
+                        )
+                    )
+                }
+                rs.close()
+                pstmt.close()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                conn.close()
+            }
+        }
+        return list
+    }
+}
+
 fun Route.newJoiningRouting() {
     post("/api/turso/upload-new-joining") {
         val multipart = call.receiveMultipart()
         val employeeList = mutableListOf<NewJMasterDto>()
         val formatter = DataFormatter()
+
+        // Load official branches dynamically and build normalized lookup map for typo rectification
+        val officialBranches = MasterDataRepository.getOfficialBranches()
+        val branchLookup = officialBranches.associateBy { it.lowercase().replace(Regex("[^a-z0-9]"), "") }
+
+        // Load official designations dynamically and build normalized lookup map
+        val officialDesignations = MasterDataRepository.getOfficialDesignations()
+        val designationLookup = officialDesignations.associateBy { it.designation.lowercase().replace(Regex("[^a-z0-9]"), "") }
+
+        // Helper function to rectify and standardize branch name
+        fun rectifyBranchName(rawBranch: String): String {
+            val clean = rawBranch.trim()
+            if (clean.isBlank()) return ""
+            val key = clean.lowercase().replace(Regex("[^a-z0-9]"), "")
+            return branchLookup[key] ?: officialBranches.find { it.equals(clean, ignoreCase = true) } 
+                ?: clean.lowercase().split(Regex("\\s+")).joinToString(" ") { word ->
+                    word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ENGLISH) else it.toString() }
+                }
+        }
+
+        // Helper function to rectify and standardize designation against Designation table
+        fun rectifyDesignation(rawDesignation: String): String {
+            val clean = rawDesignation.trim()
+            if (clean.isBlank()) return ""
+            val key = clean.lowercase().replace(Regex("[^a-z0-9]"), "")
+            return designationLookup[key]?.designation 
+                ?: officialDesignations.find { it.designation.equals(clean, ignoreCase = true) }?.designation
+                ?: clean.lowercase().split(Regex("\\s+")).joinToString(" ") { word ->
+                    word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ENGLISH) else it.toString() }
+                }
+        }
 
         // Helper function to clean, validate, and standardize date format to yyyy-MM-dd with 1950 year pivot
         fun cleanAndFormatDate(rawDate: String): String {
@@ -86,7 +196,6 @@ fun Route.newJoiningRouting() {
                 part.split("/").map { subPart ->
                     subPart.split(" ").map { word ->
                         if (word.isNotEmpty()) {
-                            // Capitalize first letter of each sub-word, keeping acronyms or abbreviations readable
                             word.lowercase().replaceFirstChar { it.titlecase(Locale.ENGLISH) }
                         } else ""
                     }.joinToString(" ")
@@ -107,7 +216,7 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Read rows
+                    // Read rows (up to 10 rows)
                     for (row in sheet.take(10)) {
                         val slNo = getCellString(row, 0)
                         val rawEmpName = getCellString(row, 1)
@@ -127,8 +236,8 @@ fun Route.newJoiningRouting() {
                                 empName = toProperCase(rawEmpName),
                                 fathersName = toProperCase(getCellString(row, 2)),
                                 dob = cleanAndFormatDate(rawDob),
-                                designation = toProperCase(getCellString(row, 4)),
-                                branchName = toProperCase(getCellString(row, 5)),
+                                designation = rectifyDesignation(getCellString(row, 4)), // Rectified & validated against Designation table
+                                branchName = rectifyBranchName(getCellString(row, 5)), // Rectified & validated against BranchDetails table
                                 areaName = toProperCase(getCellString(row, 6)),
                                 dojInAdhikar = cleanAndFormatDate(rawDojAdhikar),
                                 dojInBranch = cleanAndFormatDate(rawDojBranch),
