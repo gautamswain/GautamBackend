@@ -58,19 +58,40 @@ fun Route.newJoiningRouting() {
             for (fmt in formatters) {
                 try {
                     val parsedDate = LocalDate.parse(cleanStr, fmt)
-                    return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE) // Returns YYYY-MM-DD
+                    return parsedDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 } catch (_: DateTimeParseException) {}
             }
             return rawDate.trim()
         }
 
-        // Helper to clean address strings from Excel/VBA inputs
+        // Helper function to convert uppercase/raw strings into Proper Case (Title Case)
+        fun toProperCase(text: String): String {
+            if (text.isBlank()) return ""
+            return text.trim().lowercase().split(Regex("\\s+"))
+                .joinToString(" ") { word ->
+                    word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ENGLISH) else it.toString() }
+                }
+        }
+
+        // Helper to clean and format address strings into Proper Case while preserving punctuation and abbreviations
         fun cleanAddress(rawAddress: String): String {
-            return rawAddress.replace("\r\n", ", ")
+            if (rawAddress.isBlank()) return ""
+            val normalized = rawAddress.replace("\r\n", ", ")
                 .replace("\n", ", ")
                 .replace("\r", ", ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
+
+            return normalized.split(", ").map { part ->
+                part.split("/").map { subPart ->
+                    subPart.split(" ").map { word ->
+                        if (word.isNotEmpty()) {
+                            // Capitalize first letter of each sub-word, keeping acronyms or abbreviations readable
+                            word.lowercase().replaceFirstChar { it.titlecase(Locale.ENGLISH) }
+                        } else ""
+                    }.joinToString(" ")
+                }.joinToString("/")
+            }.joinToString(", ")
         }
 
         multipart.forEachPart { part ->
@@ -86,14 +107,12 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Read from row 1 to 10
+                    // Read rows
                     for (row in sheet.take(10)) {
                         val slNo = getCellString(row, 0)
-                        val empName = getCellString(row, 1)
-                        
-                        println("Row Check -> Sl.No: '$slNo', Emp Name: '$empName'")
+                        val rawEmpName = getCellString(row, 1)
 
-                        if (slNo.isNotBlank() && empName.isNotBlank() && slNo.lowercase() != "sl.no") {
+                        if (slNo.isNotBlank() && rawEmpName.isNotBlank() && slNo.lowercase() != "sl.no") {
                             val rawAadhar = getCellString(row, 13)
                             val rawAccount = getCellString(row, 16)
                             val rawDob = getCellString(row, 3)
@@ -105,31 +124,31 @@ fun Route.newJoiningRouting() {
 
                             val dto = NewJMasterDto(
                                 slNo = slNo,
-                                empName = empName,
-                                fathersName = getCellString(row, 2),
+                                empName = toProperCase(rawEmpName),
+                                fathersName = toProperCase(getCellString(row, 2)),
                                 dob = cleanAndFormatDate(rawDob),
-                                designation = getCellString(row, 4),
-                                branchName = getCellString(row, 5),
-                                areaName = getCellString(row, 6),
+                                designation = toProperCase(getCellString(row, 4)),
+                                branchName = toProperCase(getCellString(row, 5)),
+                                areaName = toProperCase(getCellString(row, 6)),
                                 dojInAdhikar = cleanAndFormatDate(rawDojAdhikar),
                                 dojInBranch = cleanAndFormatDate(rawDojBranch),
                                 presentAddress = cleanAddress(getCellString(row, 9)),
                                 permanentAddress = cleanAddress(getCellString(row, 10)),
-                                education = getCellString(row, 11),
+                                education = getCellString(row, 11).uppercase(),
                                 contactNo = getCellString(row, 12),
                                 aadharNo = cleanAadhar,
                                 panNo = getCellString(row, 14).replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase(),
-                                bankName = getCellString(row, 15),
+                                bankName = getCellString(row, 15).uppercase(),
                                 accountNo = cleanAccount,
                                 ifscCode = getCellString(row, 17).replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase(),
                                 esi = getCellString(row, 18),
                                 uanNo = getCellString(row, 19),
-                                gender = getCellString(row, 20),
+                                gender = toProperCase(getCellString(row, 20)),
                                 contactno2 = getCellString(row, 21),
-                                email = getCellString(row, 22),
+                                email = getCellString(row, 22).lowercase(),
                                 companyExperience = getCellString(row, 23),
-                                refferencedBy = getCellString(row, 24),
-                                interviewdBy = getCellString(row, 25)
+                                refferencedBy = toProperCase(getCellString(row, 24)),
+                                interviewdBy = toProperCase(getCellString(row, 25))
                             )
                             employeeList.add(dto)
                         }
