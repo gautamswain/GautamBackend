@@ -30,6 +30,7 @@ dependencies {
     // Content Negotiation & JSON Serialization
     implementation("io.ktor:ktor-server-content-negotiation-jvm:2.3.10")
     implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:2.3.10")
+    implementation("io.ktor:ktor-server-cors-jvm:2.3.10")
 
     // Logging Plugins
     implementation("io.ktor:ktor-server-call-logging-jvm:2.3.10")

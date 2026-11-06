@@ -55,7 +55,7 @@ fun Application.module() {
         allowMethod(HttpMethod.Get)
         allowMethod(HttpMethod.Post)
         allowMethod(HttpMethod.Put)
-        allowMethod(HttpMethod.Delete}
+        allowMethod(HttpMethod.Delete)
     }
 
     // Google Drive Service Initialization using Environment Variables
