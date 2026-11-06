@@ -7,7 +7,10 @@ import io.ktor.server.routing.*
 import io.ktor.http.*
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
 import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoField
+import java.util.Locale
 import kotlinx.serialization.json.*
 
 @kotlinx.serialization.Serializable
@@ -15,17 +18,24 @@ data class ComprehensiveVerificationReport(
     val employeeName: String,
     val isPanValid: Boolean,
     val panMessage: String,
+    val panStatusIcon: String, // "👍" or "👎"
     val isAadharValid: Boolean,
     val aadharMessage: String,
+    val aadharStatusIcon: String, // "👍" or "👎"
     val isAccountValid: Boolean,
     val accountMessage: String,
+    val accountStatusIcon: String, // "👍" or "👎"
     val isIfscValid: Boolean,
     val ifscMessage: String,
+    val ifscStatusIcon: String, // "👍" or "👎"
     val isDobValid: Boolean,
     val dobMessage: String,
+    val dobStatusIcon: String, // "👍" or "👎"
     val isDojValid: Boolean,
     val dojMessage: String,
+    val dojStatusIcon: String, // "👍" or "👎"
     val hasDuplicates: Boolean,
+    val duplicateStatusIcon: String, // "👍" or "👎"
     val totalMatches: Int,
     val matchedRecords: List<MatchedDatabaseRecord>,
     val overallSummary: String
@@ -83,24 +93,24 @@ fun Route.employeeVerificationRoute() {
             val bodyText = call.receiveText()
             val jsonElement = Json.parseToJsonElement(bodyText).jsonObject
 
-            val empName = jsonElement["emp_name"]?.jsonPrimitive?.content ?: ""
-            val fathersName = jsonElement["fathers_name"]?.jsonPrimitive?.content ?: ""
+            val empName = jsonElement["emp_name"]?.jsonPrimitive?.content ?: jsonElement["empName"]?.jsonPrimitive?.content ?: ""
+            val fathersName = jsonElement["fathers_name"]?.jsonPrimitive?.content ?: jsonElement["fathersName"]?.jsonPrimitive?.content ?: ""
             val rawDob = jsonElement["dob"]?.jsonPrimitive?.content ?: ""
-            val rawDoj = jsonElement["doj_in_adhikar"]?.jsonPrimitive?.content ?: jsonElement["doj"]?.jsonPrimitive?.content ?: ""
-            val rawPan = jsonElement["pan_no"]?.jsonPrimitive?.content ?: ""
-            val rawAadhar = jsonElement["aadhar_no"]?.jsonPrimitive?.content ?: ""
-            val rawAccount = jsonElement["account_no"]?.jsonPrimitive?.content ?: ""
-            val rawIfsc = jsonElement["ifsc_code"]?.jsonPrimitive?.content ?: jsonElement["ifsc"]?.jsonPrimitive?.content ?: ""
-            val contactNo = jsonElement["contact_no"]?.jsonPrimitive?.content ?: ""
+            val rawDoj = jsonElement["doj_in_adhikar"]?.jsonPrimitive?.content ?: jsonElement["dojInAdhikar"]?.jsonPrimitive?.content ?: jsonElement["doj"]?.jsonPrimitive?.content ?: ""
+            val rawPan = jsonElement["pan_no"]?.jsonPrimitive?.content ?: jsonElement["panNo"]?.jsonPrimitive?.content ?: ""
+            val rawAadhar = jsonElement["aadhar_no"]?.jsonPrimitive?.content ?: jsonElement["aadharNo"]?.jsonPrimitive?.content ?: ""
+            val rawAccount = jsonElement["account_no"]?.jsonPrimitive?.content ?: jsonElement["accountNo"]?.jsonPrimitive?.content ?: ""
+            val rawIfsc = jsonElement["ifsc_code"]?.jsonPrimitive?.content ?: jsonElement["ifscCode"]?.jsonPrimitive?.content ?: jsonElement["ifsc"]?.jsonPrimitive?.content ?: ""
+            val contactNo = jsonElement["contact_no"]?.jsonPrimitive?.content ?: jsonElement["contactNo"]?.jsonPrimitive?.content ?: ""
             val contactNo2 = jsonElement["contactno2"]?.jsonPrimitive?.content ?: ""
 
-            // Clean special characters, spaces, and invisible symbols from inputs
+            // Clean inputs
             val cleanPan = rawPan.replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase()
             val cleanAadhar = rawAadhar.replace(Regex("[^0-9]"), "").trim()
             val cleanAccount = rawAccount.replace(Regex("[^0-9]"), "").trim()
             val cleanIfsc = rawIfsc.replace(Regex("[^A-Za-z0-9]"), "").trim().uppercase()
-            val cleanDob = rawDob.replace(Regex("[^0-9-/.]"), "").trim()
-            val cleanDoj = rawDoj.replace(Regex("[^0-9-/.]"), "").trim()
+            val cleanDob = rawDob.trim()
+            val cleanDoj = rawDoj.trim()
 
             // 1. PAN Validation
             val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
@@ -122,34 +132,52 @@ fun Route.employeeVerificationRoute() {
             val isAccountValid = accountRegex.matches(cleanAccount)
             val accountMessage = if (isAccountValid) "Bank account number format and length are valid." else "Invalid bank account number (Must be 9 to 18 digits)."
 
-            // 4. IFSC Code Validation (4 letters, 0, 6 alphanumeric characters)
+            // 4. IFSC Code Validation
             val ifscRegex = Regex("^[A-Z]{4}0[A-Z0-9]{6}$")
             val isIfscValid = ifscRegex.matches(cleanIfsc)
             val ifscMessage = if (isIfscValid) "IFSC code format is valid." else "Invalid IFSC code format (e.g., SBIN0001234)."
 
-            // 5. DOB Validation
-            var isDobValid = false
-            for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"), DateTimeFormatter.ofPattern("dd.MM.yyyy"))) {
-                try {
-                    LocalDate.parse(cleanDob, formatter)
-                    isDobValid = true
-                    break
-                } catch (_: DateTimeParseException) {}
+            // Date parsing helper with 1950 pivot for 2-digit years
+            fun isValidDate(dateStr: String): Boolean {
+                if (dateStr.isBlank()) return false
+                val customFormatterD = DateTimeFormatterBuilder()
+                    .appendPattern("d-MMM-")
+                    .appendValueReduced(ChronoField.YEAR, 2, 2, 1950)
+                    .toFormatter(Locale.ENGLISH)
+
+                val customFormatterDd = DateTimeFormatterBuilder()
+                    .appendPattern("dd-MMM-")
+                    .appendValueReduced(ChronoField.YEAR, 2, 2, 1950)
+                    .toFormatter(Locale.ENGLISH)
+
+                val formatters = listOf(
+                    customFormatterD,
+                    customFormatterDd,
+                    DateTimeFormatter.ofPattern("d-MMM-yyyy", Locale.ENGLISH),
+                    DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
+                    DateTimeFormatter.ISO_LOCAL_DATE,
+                    DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+                    DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+                    DateTimeFormatter.ofPattern("dd.MM.yyyy")
+                )
+                for (fmt in formatters) {
+                    try {
+                        LocalDate.parse(dateStr, fmt)
+                        return true
+                    } catch (_: DateTimeParseException) {}
+                }
+                return false
             }
+
+            // 5. DOB Validation
+            val isDobValid = isValidDate(cleanDob)
             val dobMessage = if (isDobValid) "Date of Birth format is valid." else "Invalid Date of Birth format."
 
             // 6. DOJ Validation
-            var isDojValid = false
-            for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"), DateTimeFormatter.ofPattern("dd.MM.yyyy"))) {
-                try {
-                    LocalDate.parse(cleanDoj, formatter)
-                    isDojValid = true
-                    break
-                } catch (_: DateTimeParseException) {}
-            }
+            val isDojValid = isValidDate(cleanDoj)
             val dojMessage = if (isDojValid) "Date of Joining format is valid." else "Invalid Date of Joining format."
 
-            // 7. Turso MasterData Duplicate Check (Using exact DB schema column names with suffixes)
+            // 7. Turso MasterData Duplicate Check
             val conn = TursoDatabaseService.getConnection()
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
@@ -229,26 +257,34 @@ fun Route.employeeVerificationRoute() {
                 }
             }
 
+            val hasDuplicates = matchedRecords.isNotEmpty()
             val summary = buildString {
-                append(if (matchedRecords.isNotEmpty()) "Duplicate Warning: Found ${matchedRecords.size} matching record(s) in MasterData. " else "No duplicate records found in MasterData. ")
-                append(if (isPanValid && isAadharValid && isAccountValid && isIfscValid && isDobValid && isDojValid) "All formats are valid." else "Some format validations failed.")
+                append(if (hasDuplicates) "Duplicate Warning: Found ${matchedRecords.size} matching record(s) in MasterData. " else "No duplicate records found in MasterData. ")
+                append(if (isPanValid && isAadharValid && isAccountValid && isIfscValid && isDobValid && isDojValid && !hasDuplicates) "All formats are valid and no duplicates found." else "Some format validations failed or duplicates detected.")
             }
 
             val report = ComprehensiveVerificationReport(
                 employeeName = empName.ifBlank { "Unknown" },
                 isPanValid = isPanValid,
                 panMessage = panMessage,
+                panStatusIcon = if (isPanValid) "👍" else "👎",
                 isAadharValid = isAadharValid,
                 aadharMessage = aadharMessage,
+                aadharStatusIcon = if (isAadharValid) "👍" else "👎",
                 isAccountValid = isAccountValid,
                 accountMessage = accountMessage,
+                accountStatusIcon = if (isAccountValid) "👍" else "👎",
                 isIfscValid = isIfscValid,
                 ifscMessage = ifscMessage,
+                ifscStatusIcon = if (isIfscValid) "👍" else "👎",
                 isDobValid = isDobValid,
                 dobMessage = dobMessage,
+                dobStatusIcon = if (isDobValid) "👍" else "👎",
                 isDojValid = isDojValid,
                 dojMessage = dojMessage,
-                hasDuplicates = matchedRecords.isNotEmpty(),
+                dojStatusIcon = if (isDojValid) "👍" else "👎",
+                hasDuplicates = hasDuplicates,
+                duplicateStatusIcon = if (!hasDuplicates) "👍" else "👎",
                 totalMatches = matchedRecords.size,
                 matchedRecords = matchedRecords,
                 overallSummary = summary
