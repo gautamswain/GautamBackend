@@ -11,7 +11,9 @@ import org.apache.poi.ss.usermodel.WorkbookFactory
 import java.io.InputStream
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
 import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoField
 import java.util.Locale
 
 fun Route.newJoiningRouting() {
@@ -21,14 +23,24 @@ fun Route.newJoiningRouting() {
         val formatter = DataFormatter()
 
         // Helper function to clean, validate, and standardize date format to yyyy-MM-dd
-        // Supports both single-digit ('7-May-91') and double-digit ('07-May-91') day formats
+        // Uses DateTimeFormatterBuilder with a pivot of 1950 so 2-digit years like '91 become 1991 instead of 2091
         fun cleanAndFormatDate(rawDate: String): String {
             val cleanStr = rawDate.trim()
             if (cleanStr.isBlank()) return ""
             
+            val customFormatterD = DateTimeFormatterBuilder()
+                .appendPattern("d-MMM-")
+                .appendValueReduced(ChronoField.YEAR, 2, 2, 1950)
+                .toFormatter(Locale.ENGLISH)
+
+            val customFormatterDd = DateTimeFormatterBuilder()
+                .appendPattern("dd-MMM-")
+                .appendValueReduced(ChronoField.YEAR, 2, 2, 1950)
+                .toFormatter(Locale.ENGLISH)
+
             val formatters = listOf(
-                DateTimeFormatter.ofPattern("d-MMM-yy", Locale.ENGLISH),
-                DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH),
+                customFormatterD,
+                customFormatterDd,
                 DateTimeFormatter.ofPattern("d-MMM-yyyy", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("d/MMM/yy", Locale.ENGLISH),
@@ -66,15 +78,13 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Row 1 ru row 10 parjanta read karibapain (index 0 ru take(10) rows)
+                    // Read from row 1 to 10
                     for (row in sheet.take(10)) {
                         val slNo = getCellString(row, 0)
                         val empName = getCellString(row, 1)
                         
-                        // Debug log to check row values in Render logs
                         println("Row Check -> Sl.No: '$slNo', Emp Name: '$empName'")
 
-                        // Check if Sl.No is a valid number/present and Emp Name is not blank
                         if (slNo.isNotBlank() && empName.isNotBlank() && slNo.lowercase() != "sl.no") {
                             val rawAadhar = getCellString(row, 13)
                             val rawAccount = getCellString(row, 16)
@@ -82,7 +92,6 @@ fun Route.newJoiningRouting() {
                             val rawDojAdhikar = getCellString(row, 7)
                             val rawDojBranch = getCellString(row, 8)
 
-                            // Remove special characters and spaces from Aadhaar and Bank Account Number
                             val cleanAadhar = rawAadhar.replace(Regex("[^0-9]"), "").trim()
                             val cleanAccount = rawAccount.replace(Regex("[^0-9]"), "").trim()
 
