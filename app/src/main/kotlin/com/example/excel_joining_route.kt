@@ -21,18 +21,26 @@ fun Route.newJoiningRouting() {
         val formatter = DataFormatter()
 
         // Helper function to clean, validate, and standardize date format to yyyy-MM-dd
+        // Supports both single-digit ('7-May-91') and double-digit ('07-May-91') day formats
         fun cleanAndFormatDate(rawDate: String): String {
             val cleanStr = rawDate.trim()
             if (cleanStr.isBlank()) return ""
             
             val formatters = listOf(
+                DateTimeFormatter.ofPattern("d-MMM-yy", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("d-MMM-yyyy", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("d/MMM/yy", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("dd/MMM/yy", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("d/MMM/yyyy", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("dd/MMM/yyyy", Locale.ENGLISH),
                 DateTimeFormatter.ISO_LOCAL_DATE,
+                DateTimeFormatter.ofPattern("d-M-yyyy"),
                 DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+                DateTimeFormatter.ofPattern("d/M/yyyy"),
                 DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+                DateTimeFormatter.ofPattern("d.M.yyyy"),
                 DateTimeFormatter.ofPattern("dd.MM.yyyy")
             )
             
