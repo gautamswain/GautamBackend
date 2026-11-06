@@ -56,6 +56,7 @@ fun Application.module() {
         }
 
         newJoiningRouting()
+        employeeVerificationRoute()
 
         // Test Drive Upload Endpoint
         get("/upload-test") {
