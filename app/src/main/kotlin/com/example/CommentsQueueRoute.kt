@@ -18,14 +18,14 @@ fun Route.commentsQueueRoute() {
                 return@post
             }
 
-            val jsonElement = try {
+            val jsonObject = try {
                 Json.parseToJsonElement(bodyText).jsonObject
             } catch (e: Exception) {
                 null
             }
 
-            val slNo = jsonElement?.get("sl_no"]?.jsonPrimitive?.content 
-                ?: jsonElement?.get("slNo"]?.jsonPrimitive?.content 
+            val slNo = jsonObject?.get("sl_no")?.jsonPrimitive?.content 
+                ?: jsonObject?.get("slNo")?.jsonPrimitive?.content 
                 ?: "1"
             
             val separator = "NewJ"
@@ -51,14 +51,14 @@ fun Route.commentsQueueRoute() {
                 """
                 conn.createStatement().execute(createTableQuery)
 
-                // 2. Insert record using execute() instead of executeUpdate() for LibSQL JDBC driver compatibility
+                // 2. Insert record using execute() for LibSQL JDBC driver compatibility
                 val insertQuery = "INSERT INTO Comments (Slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
                 conn.prepareStatement(insertQuery).use { pstmt ->
                     pstmt.setString(1, slNo)
                     pstmt.setString(2, separator)
                     pstmt.setString(3, jsonDetails)
                     pstmt.setString(4, wefDate)
-                    pstmt.execute() // <--- Fixed from executeUpdate() to execute()
+                    pstmt.execute()
                 }
 
                 call.respond(HttpStatusCode.OK, mapOf("success" to true, "message" to "Successfully added to queue!"))
