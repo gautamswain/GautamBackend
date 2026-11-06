@@ -8,6 +8,7 @@ import io.ktor.http.*
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlinx.serialization.json.*
 
 @kotlinx.serialization.Serializable
 data class ComprehensiveVerificationReport(
@@ -38,23 +39,34 @@ data class MatchedDatabaseRecord(
 fun Route.employeeVerificationRoute() {
     post("/api/turso/comprehensive-verify") {
         try {
-            val newEmp = call.receive<NewJMasterDto>()
+            val bodyText = call.receiveText()
+            val jsonElement = Json.parseToJsonElement(bodyText).jsonObject
+
+            val empName = jsonElement["emp_name"]?.jsonPrimitive?.content ?: ""
+            val fathersName = jsonElement["fathers_name"]?.jsonPrimitive?.content ?: ""
+            val dob = jsonElement["dob"]?.jsonPrimitive?.content ?: ""
+            val doj = jsonElement["doj_in_adhikar"]?.jsonPrimitive?.content ?: jsonElement["doj"]?.jsonPrimitive?.content ?: ""
+            val panNo = jsonElement["pan_no"]?.jsonPrimitive?.content ?: ""
+            val aadharNo = jsonElement["aadhar_no"]?.jsonPrimitive?.content ?: ""
+            val accountNo = jsonElement["account_no"]?.jsonPrimitive?.content ?: ""
+            val contactNo = jsonElement["contact_no"]?.jsonPrimitive?.content ?: ""
+            val contactNo2 = jsonElement["contactno2"]?.jsonPrimitive?.content ?: ""
 
             // 1. PAN Validation
-            val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]$")
-            val cleanPan = newEmp.panNo.trim().uppercase()
-            val isPanValid = (cleanPan.length == 10) && panRegex.matches(cleanPan)
+            val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
+            val cleanPan = panNo.trim().uppercase()
+            val isPanValid = cleanPan.length == 10 && panRegex.matches(cleanPan)
             val panMessage = if (isPanValid) "PAN format and length are valid." else "Invalid PAN format or length (Must be 10 characters: AAAAA9999A)."
 
-            // 2. Aadhaar Validation
-            val cleanAadhar = newEmp.aadharNo.replace(Regex("\\s+"), "").trim()
+            // 2. Aadhaar Validation ([Aadhaar Redacted])
+            val cleanAadhar = aadharNo.replace(Regex("\\s+"), "").trim()
             val aadharRegex = Regex("^[0-9]{12}$")
-            val isAadharValid = (cleanAadhar.length == 12) && aadharRegex.matches(cleanAadhar)
+            val isAadharValid = cleanAadhar.length == 12 && aadharRegex.matches(cleanAadhar)
             val aadharMessage = if (isAadharValid) "Aadhaar format and length are valid." else "Invalid Aadhaar format or length (Must be 12 digits)."
 
             // 3. DOB Validation
             var isDobValid = false
-            val dobString = newEmp.dob.trim()
+            val dobString = dob.trim()
             for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"))) {
                 try {
                     LocalDate.parse(dobString, formatter)
@@ -66,7 +78,7 @@ fun Route.employeeVerificationRoute() {
 
             // 4. DOJ Validation
             var isDojValid = false
-            val dojString = newEmp.dojInAdhikar.trim()
+            val dojString = doj.trim()
             for (formatter in listOf(DateTimeFormatter.ISO_LOCAL_DATE, DateTimeFormatter.ofPattern("dd-MM-yyyy"), DateTimeFormatter.ofPattern("dd/MM/yyyy"))) {
                 try {
                     LocalDate.parse(dojString, formatter)
@@ -76,7 +88,7 @@ fun Route.employeeVerificationRoute() {
             }
             val dojMessage = if (isDojValid) "Date of Joining format is valid." else "Invalid Date of Joining format."
 
-            // 5. Turso MasterData Duplicate Check (Using exact DB column names)
+            // 5. Turso MasterData Duplicate Check (Using exact DB schema column names with suffixes)
             val conn = TursoDatabaseService.getConnection()
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
@@ -84,34 +96,34 @@ fun Route.employeeVerificationRoute() {
                 try {
                     val query = """
                         SELECT * FROM MasterData 
-                        WHERE (pan_card_no IS NOT NULL AND pan_card_no != '' AND pan_card_no = ?) 
-                           OR (aadhar_card_no IS NOT NULL AND aadhar_card_no != '' AND aadhar_card_no = ?) 
-                           OR (bank_account_number IS NOT NULL AND bank_account_number != '' AND bank_account_number = ?) 
-                           OR (personal_contact_number IS NOT NULL AND personal_contact_number != '' AND (personal_contact_number = ? OR personal_contact_number = ?))
-                           OR (contact_no_2 IS NOT NULL AND contact_no_2 != '' AND (contact_no_2 = ? OR contact_no_2 = ?))
+                        WHERE (pan_card_no_17 IS NOT NULL AND pan_card_no_17 != '' AND pan_card_no_17 = ?) 
+                           OR (aadhar_card_no_16 IS NOT NULL AND aadhar_card_no_16 != '' AND aadhar_card_no_16 = ?) 
+                           OR (bank_account_number_20 IS NOT NULL AND bank_account_number_20 != '' AND bank_account_number_20 = ?) 
+                           OR (personal_contact_number_14 IS NOT NULL AND personal_contact_number_14 != '' AND (personal_contact_number_14 = ? OR personal_contact_number_14 = ?))
+                           OR (contact_no_2_15 IS NOT NULL AND contact_no_2_15 != '' AND (contact_no_2_15 = ? OR contact_no_2_15 = ?))
                     """
                     
                     val pstmt = conn.prepareStatement(query)
                     pstmt.setString(1, cleanPan)
                     pstmt.setString(2, cleanAadhar)
-                    pstmt.setString(3, newEmp.accountNo.trim())
-                    pstmt.setString(4, newEmp.contactNo.trim())
-                    pstmt.setString(5, newEmp.contactno2.trim())
-                    pstmt.setString(6, newEmp.contactNo.trim())
-                    pstmt.setString(7, newEmp.contactno2.trim())
+                    pstmt.setString(3, accountNo.trim())
+                    pstmt.setString(4, contactNo.trim())
+                    pstmt.setString(5, contactNo2.trim())
+                    pstmt.setString(6, contactNo.trim())
+                    pstmt.setString(7, contactNo2.trim())
 
                     val rs = pstmt.executeQuery()
                     while (rs.next()) {
-                        val dbEmpId = rs.getString("code") ?: rs.getString("emp_id") ?: rs.getString("id") ?: ""
-                        val dbEmpName = rs.getString("employee_name") ?: ""
-                        val dbFatherName = rs.getString("fathers_name") ?: ""
-                        val dbBranch = rs.getString("branch_name") ?: ""
-                        val dbDob = rs.getString("dob") ?: ""
-                        val dbPan = rs.getString("pan_card_no") ?: ""
-                        val dbAadhar = rs.getString("aadhar_card_no") ?: ""
-                        val dbAccount = rs.getString("bank_account_number") ?: ""
-                        val dbPhone1 = rs.getString("personal_contact_number") ?: ""
-                        val dbPhone2 = rs.getString("contact_no_2") ?: ""
+                        val dbEmpId = rs.getString("Code_2") ?: rs.getString("emp_id") ?: ""
+                        val dbEmpName = rs.getString("employee_name_3") ?: ""
+                        val dbFatherName = rs.getString("fathers_name_4") ?: ""
+                        val dbBranch = rs.getString("branch_name_9") ?: ""
+                        val dbDob = rs.getString("dob_6") ?: ""
+                        val dbPan = rs.getString("pan_card_no_17") ?: ""
+                        val dbAadhar = rs.getString("aadhar_card_no_16") ?: ""
+                        val dbAccount = rs.getString("bank_account_number_20") ?: ""
+                        val dbPhone1 = rs.getString("personal_contact_number_14") ?: ""
+                        val dbPhone2 = rs.getString("contact_no_2_15") ?: ""
 
                         val matchedFields = mutableListOf<String>()
 
@@ -119,21 +131,21 @@ fun Route.employeeVerificationRoute() {
                             matchedFields.add("PAN Number")
                         }
                         if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("\\s+"), "")) {
-                            matchedFields.add("Aadhaar Number")
+                            matchedFields.add("Aadhaar Number ([Aadhaar Redacted])")
                         }
-                        if (newEmp.accountNo.isNotBlank() && newEmp.accountNo.trim() == dbAccount.trim()) {
+                        if (accountNo.isNotBlank() && accountNo.trim() == dbAccount.trim()) {
                             matchedFields.add("Bank Account Number")
                         }
-                        if (newEmp.contactNo.isNotBlank() && (newEmp.contactNo.trim() == dbPhone1.trim() || newEmp.contactNo.trim() == dbPhone2.trim())) {
+                        if (contactNo.isNotBlank() && (contactNo.trim() == dbPhone1.trim() || contactNo.trim() == dbPhone2.trim())) {
                             matchedFields.add("Phone Number 1")
                         }
-                        if (newEmp.contactno2.isNotBlank() && (newEmp.contactno2.trim() == dbPhone1.trim() || newEmp.contactno2.trim() == dbPhone2.trim())) {
+                        if (contactNo2.isNotBlank() && (contactNo2.trim() == dbPhone1.trim() || contactNo2.trim() == dbPhone2.trim())) {
                             matchedFields.add("Phone Number 2")
                         }
-                        if (newEmp.fathersName.isNotBlank() && newEmp.fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) {
+                        if (fathersName.isNotBlank() && fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) {
                             matchedFields.add("Father's Name")
                         }
-                        if (newEmp.dob.isNotBlank() && newEmp.dob.trim() == dbDob.trim()) {
+                        if (dob.isNotBlank() && dob.trim() == dbDob.trim()) {
                             matchedFields.add("Date of Birth")
                         }
 
@@ -162,7 +174,7 @@ fun Route.employeeVerificationRoute() {
             }
 
             val report = ComprehensiveVerificationReport(
-                employeeName = newEmp.empName ?: "Unknown",
+                employeeName = empName.ifBlank { "Unknown" },
                 isPanValid = isPanValid,
                 panMessage = panMessage,
                 isAadharValid = isAadharValid,
