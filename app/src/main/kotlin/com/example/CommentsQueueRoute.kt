@@ -20,14 +20,27 @@ fun Route.commentsQueueRoute() {
                 ?: "1"
             
             val separator = "NewJ"
-            val jsonDetails = bodyText // Full JSON of employee data
-            val wefDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE) // Today's date (YYYY-MM-DD)
+            val jsonDetails = bodyText
+            val wefDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
 
             val conn = TursoDatabaseService.getConnection()
             if (conn != null) {
                 try {
-                    val query = "INSERT INTO Comments (Slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
-                    val pstmt = conn.prepareStatement(query)
+                    // 1. Ensure Comments table exists with required columns
+                    val createTableQuery = """
+                        CREATE TABLE IF NOT EXISTS Comments (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            Slno TEXT,
+                            separater TEXT,
+                            jsondetails TEXT,
+                            wef TEXT
+                        )
+                    """
+                    conn.createStatement().execute(createTableQuery)
+
+                    // 2. Insert record
+                    val insertQuery = "INSERT INTO Comments (Slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
+                    val pstmt = conn.prepareStatement(insertQuery)
                     pstmt.setString(1, slNo)
                     pstmt.setString(2, separator)
                     pstmt.setString(3, jsonDetails)
@@ -35,7 +48,13 @@ fun Route.commentsQueueRoute() {
                     pstmt.executeUpdate()
                     pstmt.close()
 
-                    call.respond(HttpStatusCode.OK, mapOf("success" to true, "message" to "Successfully added to queue!"))
+                    call.respond(HttpStatusCode.OK, mapOf("success" to true, "message" + "" to "Successfully added to queue!"))
+                } catch (dbEx: Exception) {
+                    dbEx.printStackTrace()
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        mapOf("error" to "Database Error: ${dbEx.localizedMessage}", "exception" to dbEx.javaClass.simpleName)
+                    )
                 } finally {
                     conn.close()
                 }
@@ -44,7 +63,10 @@ fun Route.commentsQueueRoute() {
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to add to queue")))
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf("error" to (e.localizedMessage ?: "Failed to add to queue"), "exception" to e.javaClass.simpleName)
+            )
         }
     }
 }
