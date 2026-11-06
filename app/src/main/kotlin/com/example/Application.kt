@@ -1,6 +1,8 @@
 package com.example
 
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.serialization.kotlinx.json.json
@@ -11,6 +13,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.callloging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.request.path
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
@@ -42,6 +45,17 @@ fun Application.module() {
 
     install(ContentNegotiation) { 
         json() 
+    }
+
+    // CORS Configuration (ଯାହାଫଳରେ Web browser ବା HTML ଫାଇଲ୍‌ରୁ ରିକ୍ଵେଷ୍ଟ୍ ଆସିଲେ ବ୍ଲକ୍ ହେବ ନାହିଁ)
+    install(CORS) {
+        anyHost()
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Put)
+        allowMethod(HttpMethod.Delete}
     }
 
     // Google Drive Service Initialization using Environment Variables
