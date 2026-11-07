@@ -6,83 +6,55 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.http.*
 import kotlinx.serialization.json.*
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
 fun Route.commentsQueueRoute() {
     post("/api/turso/add-to-queue") {
         try {
             val bodyText = call.receiveText()
-            if (bodyText.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Request body is empty"))
+            val jsonElement = try {
+                Json.parseToJsonElement(bodyText).jsonObject
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid JSON format"))
                 return@post
             }
 
-            val jsonObject = try {
-                Json.parseToJsonElement(bodyText).jsonObject
-            } catch (e: Exception) {
-                null
-            }
-
-            val slNo = jsonObject?.get("sl_no")?.jsonPrimitive?.content 
-                ?: jsonObject?.get("slNo")?.jsonPrimitive?.content 
-                ?: "1"
-            
-            val separator = "NewJ"
-            val jsonDetails = bodyText
-            val wefDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+            // Safely extract fields with fallbacks
+            val slno = jsonElement["slno"]?.jsonPrimitive?.content ?: "1"
+            val separater = jsonElement["separater"]?.jsonPrimitive?.content ?: jsonElement["separator"]?.jsonPrimitive?.content ?: "Queue"
+            val jsonDetails = jsonElement["jsondetails"]?.jsonPrimitive?.content ?: jsonElement["jsonDetails"]?.jsonPrimitive?.content ?: bodyText
+            val wef = jsonElement["wef"]?.jsonPrimitive?.content ?: java.time.LocalDate.now().toString()
 
             val conn = TursoDatabaseService.getConnection()
             if (conn == null) {
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "TursoDatabaseService.getConnection() returned null"))
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
                 return@post
             }
 
             try {
-                // 1. Ensure Comments table exists
-                val createTableQuery = """
-                    CREATE TABLE IF NOT EXISTS Comments (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        Slno TEXT,
-                        separater TEXT,
-                        jsondetails TEXT,
-                        wef TEXT
-                    )
-                """
-                conn.createStatement().execute(createTableQuery)
+                val sql = "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?);"
+                val pstmt = conn.prepareStatement(sql)
+                pstmt.setString(1, slno)
+                pstmt.setString(2, separater)
+                pstmt.setString(3, jsonDetails)
+                pstmt.setString(4, wef)
+                
+                pstmt.executeUpdate()
+                pstmt.close()
+                conn.close()
 
-                // 2. Insert record using execute() for LibSQL JDBC driver compatibility
-                val insertQuery = "INSERT INTO Comments (Slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
-                conn.prepareStatement(insertQuery).use { pstmt ->
-                    pstmt.setString(1, slNo)
-                    pstmt.setString(2, separator)
-                    pstmt.setString(3, jsonDetails)
-                    pstmt.setString(4, wefDate)
-                    pstmt.execute()
-                }
-
-                call.respond(HttpStatusCode.OK, mapOf("success" to true, "message" to "Successfully added to queue!"))
-            } catch (dbEx: Throwable) {
+                call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Record successfully added to queue"))
+            } catch (dbEx: Exception) {
+                try { conn.close() } catch (_: Exception) {}
                 dbEx.printStackTrace()
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    mapOf(
-                        "error" to (dbEx.localizedMessage ?: "Database error"),
-                        "exception" to dbEx.javaClass.name
-                    )
-                )
-            } finally {
-                try {
-                    conn.close()
-                } catch (_: Throwable) {}
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database Error: ${dbEx.localizedMessage}"))
             }
-        } catch (t: Throwable) {
-            t.printStackTrace()
+        } catch (e: Exception) {
+            e.printStackTrace()
             call.respond(
                 HttpStatusCode.InternalServerError,
                 mapOf(
-                    "error" to (t.localizedMessage ?: "Server error"),
-                    "exception" to t.javaClass.name
+                    "error" to (e.localizedMessage ?: "Failed to process queue request"),
+                    "exception" to e.javaClass.simpleName
                 )
             )
         }
