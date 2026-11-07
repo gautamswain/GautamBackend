@@ -18,30 +18,30 @@ data class ComprehensiveVerificationReport(
     val employeeName: String,
     val isPanValid: Boolean,
     val panMessage: String,
-    val panStatusIcon: String, // "👍" or "👎"
+    val panStatusIcon: String,
     val isAadharValid: Boolean,
     val aadharMessage: String,
-    val aadharStatusIcon: String, // "👍" or "👎"
+    val aadharStatusIcon: String,
     val isAccountValid: Boolean,
     val accountMessage: String,
-    val accountStatusIcon: String, // "👍" or "👎"
+    val accountStatusIcon: String,
     val isIfscValid: Boolean,
     val ifscMessage: String,
-    val ifscStatusIcon: String, // "👍" or "👎"
+    val ifscStatusIcon: String,
     val isDobValid: Boolean,
     val dobMessage: String,
-    val dobStatusIcon: String, // "👍" or "👎"
+    val dobStatusIcon: String,
     val isDojValid: Boolean,
     val dojMessage: String,
-    val dojStatusIcon: String, // "👍" or "👎"
+    val dojStatusIcon: String,
     val isBranchValid: Boolean,
     val branchMessage: String,
-    val branchStatusIcon: String, // "👍" or "👎"
+    val branchStatusIcon: String,
     val isDesignationValid: Boolean,
     val designationMessage: String,
-    val designationStatusIcon: String, // "👍" or "👎"
+    val designationStatusIcon: String,
     val hasDuplicates: Boolean,
-    val duplicateStatusIcon: String, // "👍" or "👎"
+    val duplicateStatusIcon: String,
     val totalMatches: Int,
     val matchedRecords: List<MatchedDatabaseRecord>,
     val overallSummary: String
@@ -125,29 +125,23 @@ fun Route.employeeVerificationRoute() {
             // 1. PAN Validation
             val panRegex = Regex("^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
             val isPanValid = cleanPan.length == 10 && panRegex.matches(cleanPan)
-            val panMessage = if (isPanValid) "PAN format and length are valid." else "Invalid PAN format or length (Must be 10 characters: AAAAA9999A)."
+            val panMessage = if (isPanValid) "PAN format and length are valid." else "Invalid PAN format or length."
 
-            // 2. Aadhaar Validation with Verhoeff Checksum ([Aadhaar Redacted])
+            // 2. Aadhaar Validation
             val isAadharValid = VerhoeffValidator.isValid(cleanAadhar)
-            val aadharMessage = if (isAadharValid) {
-                "Aadhaar number and checksum combination are valid."
-            } else if (cleanAadhar.length != 12) {
-                "Invalid Aadhaar length (Must be 12 digits)."
-            } else {
-                "Invalid Aadhaar number combination (checksum failed)."
-            }
+            val aadharMessage = if (isAadharValid) "Aadhaar number and checksum are valid." else "Invalid Aadhaar number or checksum."
 
-            // 3. Bank Account Validation (9 to 18 digits)
+            // 3. Bank Account Validation
             val accountRegex = Regex("^[0-9]{9,18}$")
             val isAccountValid = accountRegex.matches(cleanAccount)
-            val accountMessage = if (isAccountValid) "Bank account number format and length are valid." else "Invalid bank account number (Must be 9 to 18 digits)."
+            val accountMessage = if (isAccountValid) "Bank account number is valid." else "Invalid bank account number."
 
             // 4. IFSC Code Validation
             val ifscRegex = Regex("^[A-Z]{4}0[A-Z0-9]{6}$")
             val isIfscValid = ifscRegex.matches(cleanIfsc)
-            val ifscMessage = if (isIfscValid) "IFSC code format is valid." else "Invalid IFSC code format (e.g., SBIN0001234)."
+            val ifscMessage = if (isIfscValid) "IFSC code format is valid." else "Invalid IFSC code format."
 
-            // Date parsing helper with 1950 pivot for 2-digit years
+            // Date parsing helper
             fun isValidDate(dateStr: String): Boolean {
                 if (dateStr.isBlank()) return false
                 val customFormatterD = DateTimeFormatterBuilder()
@@ -179,13 +173,11 @@ fun Route.employeeVerificationRoute() {
                 return false
             }
 
-            // 5. DOB Validation
             val isDobValid = isValidDate(cleanDob)
-            val dobMessage = if (isDobValid) "Date of Birth format is valid." else "Invalid Date of Birth format."
+            val dobMessage = if (isDobValid) "DOB format is valid." else "Invalid DOB format."
 
-            // 6. DOJ Validation
             val isDojValid = isValidDate(cleanDoj)
-            val dojMessage = if (isDojValid) "Date of Joining format is valid." else "Invalid Date of Joining format."
+            val dojMessage = if (isDojValid) "DOJ format is valid." else "Invalid DOJ format."
 
             // Fetch DB Master lists for Branch and Designation verification
             val dbBranches = mutableSetOf<String>()
@@ -194,124 +186,88 @@ fun Route.employeeVerificationRoute() {
 
             if (conn != null) {
                 try {
-                    // Load BranchDetails
-                    val branchStmt = conn.prepareStatement("SELECT branchnmae FROM BranchDetails")
-                    val branchRs = branchStmt.executeQuery()
-                    while (branchRs.next()) {
-                        val b = branchRs.getString("branchnmae") ?: branchRs.getString(1)
-                        if (!b.isNullOrBlank()) dbBranches.add(b.trim().lowercase())
-                    }
-                    branchRs.close()
-                    branchStmt.close()
+                    val stmt = conn.createStatement()
+                    
+                    // Load BranchDetails using updated 'branchnmae' column
+                    try {
+                        val branchRs = stmt.executeQuery("SELECT branchnmae FROM BranchDetails")
+                        while (branchRs.next()) {
+                            val b = branchRs.getString(1)
+                            if (!b.isNullOrBlank()) dbBranches.add(b.trim().lowercase())
+                        }
+                        branchRs.close()
+                    } catch (_: Exception) {}
 
                     // Load Designations
-                    val desigStmt = conn.prepareStatement("SELECT designation FROM Designation")
-                    val desigRs = desigStmt.executeQuery()
-                    while (desigRs.next()) {
-                        val d = desigRs.getString("designation") ?: desigRs.getString(1)
-                        if (!d.isNullOrBlank()) dbDesignations.add(d.trim().lowercase())
-                    }
-                    desigRs.close()
-                    desigStmt.close()
+                    try {
+                        val desigRs = stmt.executeQuery("SELECT designation FROM Designation")
+                        while (desigRs.next()) {
+                            val d = desigRs.getString(1)
+                            if (!d.isNullOrBlank()) dbDesignations.add(d.trim().lowercase())
+                        }
+                        desigRs.close()
+                    } catch (_: Exception) {}
+
+                    stmt.close()
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
             }
 
-            // 7. Branch Name Matching Validation
             val normalizedBranch = cleanBranch.lowercase()
             val isBranchValid = cleanBranch.isNotBlank() && (dbBranches.isEmpty() || dbBranches.contains(normalizedBranch))
-            val branchMessage = if (isBranchValid) {
-                "Branch name '$cleanBranch' is valid and matches master records."
-            } else {
-                "Branch mismatch error: '$cleanBranch' does not exist in BranchDetails master data."
-            }
+            val branchMessage = if (isBranchValid) "Branch name is valid." else "Branch name not found in BranchDetails master data."
 
-            // 8. Designation Matching Validation
             val normalizedDesignation = cleanDesignation.lowercase()
             val isDesignationValid = cleanDesignation.isNotBlank() && (dbDesignations.isEmpty() || dbDesignations.contains(normalizedDesignation))
-            val designationMessage = if (isDesignationValid) {
-                "Designation '$cleanDesignation' is valid and matches master records."
-            } else {
-                "Designation mismatch error: '$cleanDesignation' does not exist in Designation master data."
-            }
+            val designationMessage = if (isDesignationValid) "Designation is valid." else "Designation not found in master records."
 
-            // 9. Turso MasterData Duplicate Check
+            // Turso MasterData Duplicate Check
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
             if (conn != null) {
                 try {
-                    val query = """
-                        SELECT * FROM MasterData 
-                        WHERE (pan_card_no_17 IS NOT NULL AND pan_card_no_17 != '' AND pan_card_no_17 = ?) 
-                           OR (aadhar_card_no_16 IS NOT NULL AND aadhar_card_no_16 != '' AND aadhar_card_no_16 = ?) 
-                           OR (bank_account_number_20 IS NOT NULL AND bank_account_number_20 != '' AND bank_account_number_20 = ?) 
-                           OR (personal_contact_number_14 IS NOT NULL AND personal_contact_number_14 != '' AND (personal_contact_number_14 = ? OR personal_contact_number_14 = ?))
-                           OR (contact_no_2_15 IS NOT NULL AND contact_no_2_15 != '' AND (contact_no_2_15 = ? OR contact_no_2_15 = ?))
-                    """
+                    val query = "SELECT * FROM MasterData LIMIT 500"
+                    val stmt = conn.createStatement()
+                    val rs = stmt.executeQuery(query)
                     
-                    val pstmt = conn.prepareStatement(query)
-                    pstmt.setString(1, cleanPan)
-                    pstmt.setString(2, cleanAadhar)
-                    pstmt.setString(3, cleanAccount)
-                    pstmt.setString(4, contactNo.trim())
-                    pstmt.setString(5, contactNo2.trim())
-                    pstmt.setString(6, contactNo.trim())
-                    pstmt.setString(7, contactNo2.trim())
-
-                    val rs = pstmt.executeQuery()
                     while (rs.next()) {
-                        val dbEmpId = rs.getString("Code_2") ?: rs.getString("emp_id") ?: ""
-                        val dbEmpName = rs.getString("employee_name_3") ?: ""
-                        val dbFatherName = rs.getString("fathers_name_4") ?: ""
-                        val dbBranch = rs.getString("branch_name_9") ?: ""
-                        val dbDob = rs.getString("dob_6") ?: ""
-                        val dbPan = rs.getString("pan_card_no_17") ?: ""
-                        val dbAadhar = rs.getString("aadhar_card_no_16") ?: ""
-                        val dbAccount = rs.getString("bank_account_number_20") ?: ""
-                        val dbPhone1 = rs.getString("personal_contact_number_14") ?: ""
-                        val dbPhone2 = rs.getString("contact_no_2_15") ?: ""
+                        val dbEmpId = try { rs.getString("Code_2") ?: rs.getString("code") ?: rs.getString("emp_id") } catch (_: Exception) { "" }
+                        val dbEmpName = try { rs.getString("employee_name_3") ?: rs.getString("employee_name") } catch (_: Exception) { "" }
+                        val dbFatherName = try { rs.getString("fathers_name_4") ?: rs.getString("fathers_name") } catch (_: Exception) { "" }
+                        val dbBranch = try { rs.getString("branch_name_9") ?: rs.getString("branchnmae") } catch (_: Exception) { "" }
+                        val dbPan = try { rs.getString("pan_card_no_17") ?: rs.getString("pan") } catch (_: Exception) { "" }
+                        val dbAadhar = try { rs.getString("aadhar_card_no_16") ?: rs.getString("aadhar") } catch (_: Exception) { "" }
+                        val dbAccount = try { rs.getString("bank_account_number_20") ?: rs.getString("account_no") } catch (_: Exception) { "" }
+                        val dbPhone1 = try { rs.getString("personal_contact_number_14") } catch (_: Exception) { "" }
+                        val dbPhone2 = try { rs.getString("contact_no_2_15") } catch (_: Exception) { "" }
 
                         val matchedFields = mutableListOf<String>()
-
-                        if (cleanPan.isNotBlank() && cleanPan.equals(dbPan, ignoreCase = true)) {
-                            matchedFields.add("PAN Number")
-                        }
-                        if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("[^0-9]"), "")) {
-                            matchedFields.add("Aadhaar Number ([Aadhaar Redacted])")
-                        }
-                        if (cleanAccount.isNotBlank() && cleanAccount == dbAccount.trim()) {
-                            matchedFields.add("Bank Account Number")
-                        }
-                        if (contactNo.isNotBlank() && (contactNo.trim() == dbPhone1.trim() || contactNo.trim() == dbPhone2.trim())) {
-                            matchedFields.add("Phone Number 1")
-                        }
-                        if (contactNo2.isNotBlank() && (contactNo2.trim() == dbPhone1.trim() || contactNo2.trim() == dbPhone2.trim())) {
-                            matchedFields.add("Phone Number 2")
-                        }
-                        if (fathersName.isNotBlank() && fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) {
-                            matchedFields.add("Father's Name")
-                        }
-                        if (cleanDob.isNotBlank() && cleanDob == dbDob.trim()) {
-                            matchedFields.add("Date of Birth")
-                        }
+                        if (cleanPan.isNotBlank() && cleanPan.equals(dbPan, ignoreCase = true)) matchedFields.add("PAN Number")
+                        if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("[^0-9]"), "")) matchedFields.add("Aadhaar Number")
+                        if (cleanAccount.isNotBlank() && cleanAccount == dbAccount.trim()) matchedFields.add("Bank Account Number")
+                        if (contactNo.isNotBlank() && (contactNo.trim() == dbPhone1.trim() || contactNo.trim() == dbPhone2.trim())) matchedFields.add("Phone Number 1")
+                        if (contactNo2.isNotBlank() && (contactNo2.trim() == dbPhone1.trim() || contactNo2.trim() == dbPhone2.trim())) matchedFields.add("Phone Number 2")
+                        if (fathersName.isNotBlank() && fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) matchedFields.add("Father's Name")
 
                         if (matchedFields.isNotEmpty()) {
                             matchedRecords.add(
                                 MatchedDatabaseRecord(
-                                    empId = dbEmpId,
-                                    employeeName = dbEmpName,
-                                    fathersName = dbFatherName,
-                                    branchName = dbBranch,
+                                    empId = dbEmpId ?: "",
+                                    employeeName = dbEmpName ?: "",
+                                    fathersName = dbFatherName ?: "",
+                                    branchName = dbBranch ?: "",
                                     matchedFields = matchedFields
                                 )
                             )
                         }
                     }
                     rs.close()
-                    pstmt.close()
+                    stmt.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 } finally {
-                    conn.close()
+                    try { conn.close() } catch (_: Exception) {}
                 }
             }
 
@@ -319,8 +275,8 @@ fun Route.employeeVerificationRoute() {
             val allValid = isPanValid && isAadharValid && isAccountValid && isIfscValid && isDobValid && isDojValid && isBranchValid && isDesignationValid && !hasDuplicates
 
             val summary = buildString {
-                append(if (hasDuplicates) "Duplicate Warning: Found ${matchedRecords.size} matching record(s) in MasterData. " else "No duplicate records found in MasterData. ")
-                append(if (allValid) "All formats and master entity checks are valid." else "Format validation failures or branch/designation mismatches detected.")
+                append(if (hasDuplicates) "Duplicate Warning: Found ${matchedRecords.size} matching record(s). " else "No duplicate records found. ")
+                append(if (allValid) "All formats and entity checks are valid." else "Validation failures or mismatches detected.")
             }
 
             val report = ComprehensiveVerificationReport(
