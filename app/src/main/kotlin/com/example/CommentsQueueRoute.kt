@@ -14,15 +14,16 @@ fun Route.commentsQueueRoute() {
             val jsonElement = try {
                 Json.parseToJsonElement(bodyText).jsonObject
             } catch (e: Exception) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid JSON format"))
-                return@post
+                null
             }
 
-            // Safely extract fields with fallbacks
-            val slno = jsonElement["slno"]?.jsonPrimitive?.content ?: "1"
-            val separater = jsonElement["separater"]?.jsonPrimitive?.content ?: jsonElement["separator"]?.jsonPrimitive?.content ?: "Queue"
-            val jsonDetails = jsonElement["jsondetails"]?.jsonPrimitive?.content ?: jsonElement["jsonDetails"]?.jsonPrimitive?.content ?: bodyText
-            val wef = jsonElement["wef"]?.jsonPrimitive?.content ?: java.time.LocalDate.now().toString()
+            // Safely extract fields, falling back or packing raw DTO if sent directly
+            val slno = jsonElement?.get("slno")?.jsonPrimitive?.content ?: "1"
+            val separater = jsonElement?.get("separater")?.jsonPrimitive?.content ?: jsonElement?.get("separator")?.jsonPrimitive?.content ?: "NewJ"
+            val jsonDetails = jsonElement?.get("jsondetails")?.jsonPrimitive?.content 
+                ?: jsonElement?.get("jsonDetails")?.jsonPrimitive?.content 
+                ?: bodyText
+            val wef = jsonElement?.get("wef")?.jsonPrimitive?.content ?: java.time.LocalDate.now().toString()
 
             val conn = TursoDatabaseService.getConnection()
             if (conn == null) {
@@ -57,6 +58,42 @@ fun Route.commentsQueueRoute() {
                     "exception" to e.javaClass.simpleName
                 )
             )
+        }
+    }
+
+    get("/api/turso/comments/{separater}") {
+        val separater = call.parameters["separater"] ?: "NewJ"
+        val conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@get
+        }
+
+        try {
+            val pstmt = conn.prepareStatement("SELECT * FROM Comments WHERE separater = ? ORDER BY id DESC")
+            pstmt.setString(1, separater)
+            val rs = pstmt.executeQuery()
+
+            val records = mutableListOf<Map<String, String>>()
+            while (rs.next()) {
+                records.add(
+                    mapOf(
+                        "id" to (rs.getString("id") ?: ""),
+                        "slno" to (rs.getString("slno") ?: ""),
+                        "separater" to (rs.getString("separater") ?: ""),
+                        "jsondetails" to (rs.getString("jsondetails") ?: ""),
+                        "wef" to (rs.getString("wef") ?: "")
+                    )
+                )
+            }
+            rs.close()
+            pstmt.close()
+            conn.close()
+
+            call.respond(records)
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
         }
     }
 }
