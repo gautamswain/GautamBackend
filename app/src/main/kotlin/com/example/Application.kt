@@ -68,7 +68,7 @@ fun Application.module() {
         get("/") { 
             call.respondText("Welcome to Ktor Backend!") 
         }
-
+	branchDetailsUpdateRouting()
         newJoiningRouting()
         employeeVerificationRoute()
         commentsQueueRoute() // Registered queue route for adding verified employees to Comments table
