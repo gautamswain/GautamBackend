@@ -92,46 +92,50 @@ fun Route.branchDetailsUpdateRouting() {
                         val colB = formatter.formatCellValue(row.getCell(1)).trim()
                         val colC = formatter.formatCellValue(row.getCell(2)).trim()
 
-                        // ଯଦି ପୁରା ଧାଡ଼ିଟି ଖାଲି ଅଛି, ତେବେ ସ୍କିପ୍ କରିବେ
                         if (colA.isBlank() && colB.isBlank() && colC.isBlank()) {
                             continue
                         }
 
-                        val rawMatchedBranch = oToNMap[colB] ?: ""
                         val updatedKField = lToKMap[colC] ?: ""
-
                         var updateStatus = "Skipped"
 
-                        if (rawMatchedBranch.isBlank()) {
+                        if (colB.isBlank()) {
                             updateStatus = "MatchedBranch is Blank (Col B: $colB)"
                         } else if (updatedKField.isBlank()) {
                             updateStatus = "UpdatedKField is Blank (Col C: $colC)"
                         } else if (conn == null) {
                             updateStatus = "DB Connection Failed"
                         } else {
-                            val lookupKey = rawMatchedBranch.lowercase().replace(Regex("[^a-z0-9]"), "")
-                            val exactDbBranch = dbBranchMap[lookupKey]
+                            // କମା ଥିଲେ ଏକାଧିକ କି' (keys) କୁ ଅଲଗା କରିବା (ଯେପରିକି "6,7")
+                            val branchKeys = colB.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                            val statuses = mutableListOf<String>()
 
-                            if (exactDbBranch.isNullOrBlank()) {
-                                updateStatus = "Branch Not Found in DB: '$rawMatchedBranch'"
-                            } else {
+                            for (bKey in branchKeys) {
+                                val rawMatchedBranch = oToNMap[bKey] ?: bKey // ଯଦି ମ୍ୟାପ୍ ନଥାଏ ସିଧାସଳଖ ବ୍ୟବହାର କରିବ
+                                val lookupKey = rawMatchedBranch.lowercase().replace(Regex("[^a-z0-9]"), "")
+                                val exactDbBranch = dbBranchMap[lookupKey] ?: rawMatchedBranch
+
                                 try {
                                     val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
-                                    
-                                    // ଡ୍ରାଇଭର ଏରର୍ ଏଡ଼ାଇବା ପାଇଁ Safe Direct Statement ବ୍ୟବହାର କରାଗଲା
                                     val escapedVal = colA.replace("'", "''")
                                     val escapedBranch = exactDbBranch.replace("'", "''")
+                                    
                                     val sql = "UPDATE BranchDetails SET $safeColumn = '$escapedVal' WHERE branchname = '$escapedBranch'"
                                     
                                     val stmt = conn.createStatement()
                                     val rowsAffected = stmt.executeUpdate(sql)
                                     stmt.close()
 
-                                    updateStatus = if (rowsAffected > 0) "Updated Successfully ($exactDbBranch)" else "Update Failed for '$exactDbBranch'"
+                                    if (rowsAffected > 0) {
+                                        statuses.add("Updated ($exactDbBranch)")
+                                    } else {
+                                        statuses.add("Not Found ($exactDbBranch)")
+                                    }
                                 } catch (e: Exception) {
-                                    updateStatus = "Error: ${e.toString()} [${e.javaClass.simpleName}]"
+                                    statuses.add("Error: ${e.javaClass.simpleName}")
                                 }
                             }
+                            updateStatus = statuses.joinToString("; ")
                         }
 
                         processedResults.add(
@@ -140,7 +144,7 @@ fun Route.branchDetailsUpdateRouting() {
                                 columnA = colA,
                                 columnB = colB,
                                 columnC = colC,
-                                matchedBranch = rawMatchedBranch,
+                                matchedBranch = colB,
                                 updatedKField = updatedKField,
                                 dbUpdateStatus = updateStatus
                             )
