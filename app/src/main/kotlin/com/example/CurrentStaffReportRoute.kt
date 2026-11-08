@@ -32,13 +32,11 @@ fun Route.currentStaffReportRouting() {
 
     get("/api/turso/download-latest-staff-report") {
         try {
-            // Render ଏବଂ ଲୋକାଲ୍ ମେସିନ୍ ପାଇଁ ସୁରକ୍ଷିତ Temp ଫୋଲ୍ଡର୍
             val tempDir = File(System.getProperty("java.io.tmpdir"), "AdhikarStaffReports")
             if (!tempDir.exists()) {
                 tempDir.mkdirs()
             }
 
-            // ରିପୋର୍ଟ ଜେନେରେଟ୍ କରି ଟେମ୍ପ୍ ଫୋଲ୍ଡର୍‌ରେ ସେଭ୍ କରିବା
             val savedFilePath = CurrentStaffReportService.generateAndSaveReportFromDb(
                 { TursoDatabaseService.getConnection() }, 
                 tempDir.absolutePath
