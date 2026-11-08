@@ -6,6 +6,9 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
+import java.net.HttpURLConnection
+import java.net.URL
 
 private const val MAX_BATCH = 20
 
@@ -25,7 +28,7 @@ fun Route.configureSalaryRoutes() {
 
         val payload = withContext(Dispatchers.IO) {
             try {
-                fetchSalaries(lastIds)
+                fetchSalariesDirectHttp(lastIds)
             } catch (e: Exception) {
                 application.log.error("salaries-batch failed for ${lastIds.size} ids", e)
                 null
@@ -40,29 +43,111 @@ fun Route.configureSalaryRoutes() {
     }
 }
 
-private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
+private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
     if (ids.isEmpty()) return emptyList()
 
-    val results = mutableListOf<SalaryDto>()
+    val tursoUrl = "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io/v2/pipeline"
+    val authToken = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg"
 
-    for (rawId in ids) {
-        val cleanId = rawId.trim().replace("'", "")
-        if (cleanId.isEmpty()) continue
+    val placeholders = ids.joinToString(",") { "?" }
+    val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
 
-        val conn = TursoDatabaseService.getConnection()
-            ?: throw IllegalStateException("Database connection failed")
-
-        conn.use { connection ->
-            val sql = "SELECT * FROM SalaryHistory WHERE CAST(id AS TEXT) = '$cleanId'"
-            connection.createStatement().use { stmt ->
-                stmt.executeQuery(sql).use { rs ->
-                    if (rs.next()) {
-                        results.add(parseSalaryDto(rs))
-                    }
-                }
+    val argsJson = buildJsonArray {
+        ids.forEach { id ->
+            addJsonObject {
+                put("type", "text")
+                put("value", id.trim())
             }
         }
     }
 
-    return results
+    val requestBody = buildJsonObject {
+        putJsonArray("requests") {
+            addJsonObject {
+                put("type", "execute")
+                putJsonObject("stmt") {
+                    put("sql", sql)
+                    put("args", argsJson)
+                }
+            }
+            addJsonObject {
+                put("type", "close")
+            }
+        }
+    }.toString()
+
+    val url = URL(tursoUrl)
+    val conn = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        setRequestProperty("Content-Type", "application/json")
+        setRequestProperty("Authorization", "Bearer $authToken")
+        doOutput = true
+        outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
+    }
+
+    val responseText = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+    val root = Json.parseToJsonElement(responseText).jsonObject
+    val resultObj = root["results"]?.jsonArray?.get(0)?.jsonObject
+        ?.get("response")?.jsonObject
+        ?.get("result")?.jsonObject ?: return emptyList()
+
+    val cols = resultObj["cols"]?.jsonArray?.map { it.jsonObject["name"]?.jsonPrimitive?.content.orEmpty() } ?: emptyList()
+    val rows = resultObj["rows"]?.jsonArray ?: return emptyList()
+
+    val dtoList = mutableListOf<SalaryDto>()
+
+    for (rowElement in rows) {
+        val rowArr = rowElement.jsonArray
+        val map = mutableMapOf<String, String>()
+        for (i in cols.indices) {
+            val cellObj = rowArr[i].jsonObject
+            val value = cellObj["value"]?.jsonPrimitive?.contentOrNull ?: ""
+            map[cols[i].lowercase()] = value
+        }
+
+        dtoList.add(
+            SalaryDto(
+                id = map["id"] ?: map["salaryhistory-slno"] ?: "",
+                month = map["month"] ?: "",
+                slNo1 = map["sl_no_1"] ?: "",
+                empId2 = map["emp_id_2"] ?: "",
+                employeeName3 = map["employee_name_3"] ?: "",
+                designation7 = map["designation_7"] ?: "",
+                department8 = map["department_8"] ?: "",
+                branchName9 = map["branch_name_9"] ?: "",
+                portfolio7 = map["portfolio_7"] ?: "",
+                paidDays8 = map["paid_days_8"] ?: "",
+                basicDa9 = map["basic_da_9"] ?: "",
+                hra10 = map["hra_10"] ?: "",
+                conveyance11 = map["conveyance_11"] ?: "",
+                medicalAllowance12 = map["medical_allowance_12"] ?: "",
+                educationAllowance13 = map["education_allowance_13"] ?: "",
+                lunchCanteenAllowance14 = map["lunch_canteen_allownance_14"] ?: "",
+                specialAllowance15 = map["special_allowance_15"] ?: "",
+                hraVariable39 = map["hravariable_39"] ?: "",
+                otherAllowance17 = map["other_allowance_17"] ?: "",
+                daAosa40 = map["daaosa_40"] ?: "",
+                arrearsIncrement41 = map["arrears_increment_41"] ?: "",
+                epf5549 = map["epf55_49"] ?: "",
+                esi5650 = map["esi56_50"] ?: "",
+                professionalTax22 = map["professional_tax_22"] ?: "",
+                tds42 = map["tds_42"] ?: "",
+                staffLoan43 = map["staff_loan_43"] ?: "",
+                staffAdvance44 = map["staff_advance_44"] ?: "",
+                others45 = map["others_45"] ?: "",
+                otherEarnings46 = map["other_earnings_46"] ?: "",
+                grossEarnings28 = map["gross_earnings_28"] ?: "",
+                grossDeductions29 = map["gross_deductions_29"] ?: "",
+                netAmount30 = map["net_amount_30"] ?: "",
+                status00 = map["status_00"] ?: "",
+                bankAccountNumber20 = map["bank_account_number_20"] ?: "",
+                ifscCodeBankBranchName21 = map["ifsc_code_bank_branch_name_21"] ?: "",
+                bankName19 = map["bank_name_19"] ?: "",
+                backSalaryGive = map["backsalarygive"] ?: ""
+            )
+        )
+    }
+
+    val byId = dtoList.associateBy { it.id }
+    return ids.mapNotNull { byId[it] }
 }
