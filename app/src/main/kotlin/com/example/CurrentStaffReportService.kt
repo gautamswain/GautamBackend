@@ -9,7 +9,7 @@ import java.time.format.DateTimeFormatter
 object CurrentStaffReportService {
 
     fun generateAndSaveReportFromDb(getConnection: () -> Connection?, localOutputDir: String): String {
-        val allRecords = mutableListOf>()
+        val allRecords = mutableListOf<Map<String, String>>()
         val conn = getConnection()
 
         if (conn != null) {
@@ -51,7 +51,7 @@ object CurrentStaffReportService {
             "CO", "BM", "AM", "CM", "Auditors", "Telecallers", "HO", "MSME", "NPA", "Undefine", "Left"
         )
 
-        val categorizedMap = mutableMapOf<String, MutableList>>()
+        val categorizedMap = mutableMapOf<String, MutableList<Map<String, String>>>()
         for (s in sheetOrder) {
             categorizedMap[s] = mutableListOf()
         }
