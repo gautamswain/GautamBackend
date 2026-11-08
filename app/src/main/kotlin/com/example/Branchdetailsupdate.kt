@@ -97,7 +97,8 @@ fun Route.branchDetailsUpdateRouting() {
 
                                 updateStatus = if (rowsAffected > 0) "Updated Successfully ($rowsAffected row)" else "Branch Not Found: '$matchedBranch'"
                             } catch (e: Exception) {
-                                updateStatus = "Error: ${e.localizedMessage}"
+                                // Capture full exception details instead of null localized message
+                                updateStatus = "Error: ${e.toString()} [${e.javaClass.simpleName}]"
                             }
                         }
 
