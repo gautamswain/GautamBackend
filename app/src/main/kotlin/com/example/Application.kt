@@ -72,6 +72,7 @@ fun Application.module() {
         newJoiningRouting()
         employeeVerificationRoute()
         commentsQueueRoute() // Registered queue route for adding verified employees to Comments table
+        currentStaffReportRouting() // Registered Current Staff List report generation route
 
         // Test Drive Upload Endpoint
         get("/upload-test") {
