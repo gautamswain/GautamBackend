@@ -43,7 +43,7 @@ fun Route.branchDetailsUpdateRouting() {
                     val sheet = workbook.getSheetAt(0)
                     
                     val startRow = 3
-                    val endRow = minOf(23, sheet.lastRowNum)
+                    val endRow = minOf(50, sheet.lastRowNum)
 
                     val oToNMap = mutableMapOf<String, String>()
                     val lToKMap = mutableMapOf<String, String>()
