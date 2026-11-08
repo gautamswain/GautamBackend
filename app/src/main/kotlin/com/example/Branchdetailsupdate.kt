@@ -77,20 +77,23 @@ fun Route.branchDetailsUpdateRouting() {
 
                         var updateStatus = "Skipped"
 
-                        // ଡାଟାବେସ୍ ଅପଡେଟ୍ ପ୍ରକ୍ରିୟା (BranchDetails Table)
+                        // ଡାଟାବେସ୍ ଅପଡେଟ୍ ପ୍ରକ୍ରିୟା (BranchDetails Table with branchname column)
                         if (matchedBranch.isNotBlank() && updatedKField.isNotBlank() && conn != null) {
                             try {
                                 // କଲମ୍ ନାମକୁ ସୁରକ୍ଷିତ ଭାବରେ ସାନିଟାଇଜ୍ କରିବା
                                 val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
-                                val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE branchname = ?"
+                                
+                                // COLLATE NOCASE ଏବଂ LOWER ବ୍ୟବହାର କରାଗଲା ଯେପରି ସ୍ପେଲିଂ କିମ୍ବା କେସିଂ ପାର୍ଥକ୍ୟ ଥିଲେ ମଧ୍ୟ ମ୍ୟାଚ୍ ହୋଇଯିବ
+                                val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE LOWER(TRIM(branchname)) = LOWER(TRIM(?))"
                                 
                                 val pstmt = conn.prepareStatement(sql)
                                 pstmt.setString(1, colA)
                                 pstmt.setString(2, matchedBranch)
+                                
                                 val rowsAffected = pstmt.executeUpdate()
                                 pstmt.close()
 
-                                updateStatus = if (rowsAffected > 0) "Updated Successfully" else "Branch Not Found in DB"
+                                updateStatus = if (rowsAffected > 0) "Updated Successfully ($rowsAffected row(s))" else "Branch Not Found in DB"
                             } catch (e: Exception) {
                                 updateStatus = "Error: ${e.localizedMessage}"
                             }
