@@ -190,7 +190,7 @@ fun Route.employeeVerificationRoute() {
                     
                     // Load BranchDetails using updated 'branchnmae' column
                     try {
-                        val branchRs = stmt.executeQuery("SELECT branchnmae FROM BranchDetails")
+                        val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
                         while (branchRs.next()) {
                             val b = branchRs.getString(1)
                             if (!b.isNullOrBlank()) dbBranches.add(b.trim().lowercase())

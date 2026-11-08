@@ -18,7 +18,8 @@ data class BranchUpdateResult(
     val columnB: String,
     val columnC: String,
     val matchedBranch: String,
-    val updatedKField: String
+    val updatedKField: String,
+    val dbUpdateStatus: String
 )
 
 @Serializable
@@ -62,6 +63,9 @@ fun Route.branchDetailsUpdateRouting() {
                         }
                     }
 
+                    // Turso Database Connection 
+                    val conn = TursoDatabaseService.getConnection()
+
                     for (rowIndex in startRow..endRow) {
                         val row = sheet.getRow(rowIndex) ?: continue
                         val colA = formatter.formatCellValue(row.getCell(0)).trim()
@@ -69,7 +73,28 @@ fun Route.branchDetailsUpdateRouting() {
                         val colC = formatter.formatCellValue(row.getCell(2)).trim()
 
                         val matchedBranch = oToNMap[colB] ?: ""
-                        val matchedKValue = lToKMap[colC] ?: ""
+                        val updatedKField = lToKMap[colC] ?: ""
+
+                        var updateStatus = "Skipped"
+
+                        // ଡାଟାବେସ୍ ଅପଡେଟ୍ ପ୍ରକ୍ରିୟା (BranchDetails Table)
+                        if (matchedBranch.isNotBlank() && updatedKField.isNotBlank() && conn != null) {
+                            try {
+                                // କଲମ୍ ନାମକୁ ସୁରକ୍ଷିତ ଭାବରେ ସାନିଟାଇଜ୍ କରିବା
+                                val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
+                                val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE branchnmae = ?"
+                                
+                                val pstmt = conn.prepareStatement(sql)
+                                pstmt.setString(1, colA)
+                                pstmt.setString(2, matchedBranch)
+                                val rowsAffected = pstmt.executeUpdate()
+                                pstmt.close()
+
+                                updateStatus = if (rowsAffected > 0) "Updated Successfully" else "Branch Not Found in DB"
+                            } catch (e: Exception) {
+                                updateStatus = "Error: ${e.localizedMessage}"
+                            }
+                        }
 
                         processedResults.add(
                             BranchUpdateResult(
@@ -78,10 +103,12 @@ fun Route.branchDetailsUpdateRouting() {
                                 columnB = colB,
                                 columnC = colC,
                                 matchedBranch = matchedBranch,
-                                updatedKField = matchedKValue
+                                updatedKField = updatedKField,
+                                dbUpdateStatus = updateStatus
                             )
                         )
                     }
+                    try { conn?.close() } catch (_: Exception) {}
                     workbook.close()
                 }
                 else -> {}
