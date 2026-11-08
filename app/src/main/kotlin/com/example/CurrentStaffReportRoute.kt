@@ -4,14 +4,23 @@ import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.http.*
+import java.io.File
 
 fun Route.currentStaffReportRouting() {
-    // 1. ରିପୋର୍ଟ ଜେନେରେଟ୍ କରିବା ପାଇଁ ରାଉଟ୍ (ଯଦି ଦରକାର ହୁଏ)
     get("/api/turso/generate-current-staff-report") {
         try {
+            val tempDir = File(System.getProperty("java.io.tmpdir"), "AdhikarStaffReports")
+            if (!tempDir.exists()) tempDir.mkdirs()
+
+            val savedFilePath = CurrentStaffReportService.generateAndSaveReportFromDb(
+                { TursoDatabaseService.getConnection() }, 
+                tempDir.absolutePath
+            )
+
             call.respond(HttpStatusCode.OK, mapOf(
                 "status" to "success",
-                "message" to "Ready for direct download."
+                "message" to "Report generated successfully.",
+                "path" to savedFilePath
             ))
         } catch (e: Exception) {
             call.respond(HttpStatusCode.InternalServerError, mapOf(
@@ -21,25 +30,33 @@ fun Route.currentStaffReportRouting() {
         }
     }
 
-    // 2. ସର୍ଭରରେ ସେଭ୍ ନକରି ସିଧାସଳଖ ଡାଉନଲୋଡ୍ କରିବା ପାଇଁ ରାଉଟ୍
     get("/api/turso/download-latest-staff-report") {
         try {
-            // ଡାଟାବେସ୍‌ରୁ ଡାଟା ଆଣಿ ମେମୋରୀ (Bytes) ରେ ଏକ୍ସେଲ୍ ତିଆରି କରିବା
-            val excelBytes = CurrentStaffReportService.generateReportBytesFromDb { 
-                TursoDatabaseService.getConnection() 
+            // Render ଏବଂ ଲୋକାଲ୍ ମେସିନ୍ ପାଇଁ ସୁରକ୍ଷିତ Temp ଫୋଲ୍ଡର୍
+            val tempDir = File(System.getProperty("java.io.tmpdir"), "AdhikarStaffReports")
+            if (!tempDir.exists()) {
+                tempDir.mkdirs()
             }
 
-            // ବ୍ରାଉଜର୍‌କୁ ଡାଉନଲୋଡ୍ ହେବା ପାଇଁ ହେଡର୍ ସେଟ୍ କରିବା
-            call.response.header(
-                HttpHeaders.ContentDisposition,
-                ContentDisposition.Attachment.withParameter(
-                    ContentDisposition.Parameters.FileName, 
-                    "Stafflist.xlsx"
-                ).toString()
+            // ରିପୋର୍ଟ ଜେନେରେଟ୍ କରି ଟେମ୍ପ୍ ଫୋଲ୍ଡର୍‌ରେ ସେଭ୍ କରିବା
+            val savedFilePath = CurrentStaffReportService.generateAndSaveReportFromDb(
+                { TursoDatabaseService.getConnection() }, 
+                tempDir.absolutePath
             )
-            
-            // ସିଧାସଳଖ ବ୍ରାଉଜର୍‌ର ଡାଉନଲୋଡ୍ ଫୋଲ୍ଡର୍‌କୁ ପଠାଇବା
-            call.respondBytes(excelBytes, ContentType.Application.OctetStream)
+
+            val file = File(savedFilePath)
+            if (file.exists()) {
+                call.response.header(
+                    HttpHeaders.ContentDisposition,
+                    ContentDisposition.Attachment.withParameter(
+                        ContentDisposition.Parameters.FileName, 
+                        file.name
+                    ).toString()
+                )
+                call.respondFile(file)
+            } else {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Report file not found"))
+            }
         } catch (e: Exception) {
             call.respond(
                 HttpStatusCode.InternalServerError, 
