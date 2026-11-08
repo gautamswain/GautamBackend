@@ -50,16 +50,13 @@ private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
     
     // Dynamic placeholders (e.g., ?, ?, ?) ତିଆରି କରିବା
     val placeholders = ids.joinToString(",") { "?" }
-    val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders) OR sl_no_1 IN ($placeholders)"
+    val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
 
     conn.use {
         it.prepareStatement(sql).use { pstmt ->
-            // id ଏବଂ sl_no_1 ଦୁଇଟିଯାକ ପାଇଁ ପାରାମିଟରଗୁଡ଼ିକ ସେଟ୍ କରିବା
+            // id ପାଇଁ ପାରାମିଟରଗୁଡ଼ିକ ସେଟ୍ କରିବା
             ids.forEachIndexed { index, id ->
                 pstmt.setString(index + 1, id.trim())
-            }
-            ids.forEachIndexed { index, id ->
-                pstmt.setString(ids.size + index + 1, id.trim())
             }
 
             pstmt.executeQuery().use { rs ->
@@ -72,9 +69,7 @@ private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
     
     // ଇନପୁଟ୍ ଅର୍ଡର୍ (order) ଅନୁସାରେ ଡାଟା ସଜାଡ଼ିବା
     val byId = results.associateBy { it.id }
-    val bySlNo = results.associateBy { it.slNo1 }
-    
     return ids.mapNotNull { id ->
-        byId[id] ?: bySlNo[id]
+        byId[id]
     }
 }
