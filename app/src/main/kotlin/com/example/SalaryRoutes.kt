@@ -47,23 +47,34 @@ private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
         ?: throw IllegalStateException("Database connection failed")
 
     val results = mutableListOf<SalaryDto>()
+    
+    // Dynamic placeholders (e.g., ?, ?, ?) ତିଆରି କରିବା
+    val placeholders = ids.joinToString(",") { "?" }
+    val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders) OR sl_no_1 IN ($placeholders)"
+
     conn.use {
-        val sql = "SELECT * FROM SalaryHistory WHERE id = ? OR sl_no_1 = ?"
         it.prepareStatement(sql).use { pstmt ->
-            for (id in ids) {
-                val cleanId = id.trim()
-                pstmt.setString(1, cleanId)
-                pstmt.setString(2, cleanId)
-                pstmt.executeQuery().use { rs ->
-                    while (rs.next()) {
-                        results.add(parseSalaryDto(rs))
-                    }
+            // id ଏବଂ sl_no_1 ଦୁଇଟିଯାକ ପାଇଁ ପାରାମିଟରଗୁଡ଼ିକ ସେଟ୍ କରିବା
+            ids.forEachIndexed { index, id ->
+                pstmt.setString(index + 1, id.trim())
+            }
+            ids.forEachIndexed { index, id ->
+                pstmt.setString(ids.size + index + 1, id.trim())
+            }
+
+            pstmt.executeQuery().use { rs ->
+                while (rs.next()) {
+                    results.add(parseSalaryDto(rs))
                 }
             }
         }
     }
     
-    // Maintain original history order and remove duplicates if any
+    // ଇନପୁଟ୍ ଅର୍ଡର୍ (order) ଅନୁସାରେ ଡାଟା ସଜାଡ଼ିବା
     val byId = results.associateBy { it.id }
-    return ids.mapNotNull(byId::get)
+    val bySlNo = results.associateBy { it.slNo1 }
+    
+    return ids.mapNotNull { id ->
+        byId[id] ?: bySlNo[id]
+    }
 }

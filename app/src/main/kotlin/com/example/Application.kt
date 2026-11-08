@@ -75,7 +75,7 @@ fun Application.module() {
                 call.respondText("IndexReport.html not found on server directory.")
             }
         }
-
+	letterIssueRouting()
         branchDetailsUpdateRouting()
         newJoiningRouting()
         employeeVerificationRoute()
