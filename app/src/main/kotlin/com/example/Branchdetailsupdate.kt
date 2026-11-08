@@ -82,7 +82,7 @@ fun Route.branchDetailsUpdateRouting() {
                             try {
                                 // କଲମ୍ ନାମକୁ ସୁରକ୍ଷିତ ଭାବରେ ସାନିଟାଇଜ୍ କରିବା
                                 val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
-                                val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE branchnmae = ?"
+                                val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE branchname = ?"
                                 
                                 val pstmt = conn.prepareStatement(sql)
                                 pstmt.setString(1, colA)

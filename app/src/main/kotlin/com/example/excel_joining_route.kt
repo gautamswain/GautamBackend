@@ -32,10 +32,10 @@ object MasterDataRepository {
         val conn = TursoDatabaseService.getConnection()
         if (conn != null) {
             try {
-                val pstmt = conn.prepareStatement("SELECT branchnmae FROM BranchDetails")
+                val pstmt = conn.prepareStatement("SELECT branchname FROM BranchDetails")
                 val rs = pstmt.executeQuery()
                 while (rs.next()) {
-                    val bName = rs.getString("branchnmae") ?: rs.getString(1)
+                    val bName = rs.getString("branchname") ?: rs.getString(1)
                     if (!bName.isNullOrBlank()) {
                         branchList.add(bName.trim())
                     }
