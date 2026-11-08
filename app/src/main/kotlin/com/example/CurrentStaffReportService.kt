@@ -9,7 +9,7 @@ import java.time.format.DateTimeFormatter
 object CurrentStaffReportService {
 
     fun generateAndSaveReportFromDb(getConnection: () -> Connection?, localOutputDir: String): String {
-        val allRecords = mutableListOf<Map<String, String>>()
+        val allRecords = mutableListOf>()
         val conn = getConnection()
 
         if (conn != null) {
@@ -19,20 +19,20 @@ object CurrentStaffReportService {
                 
                 while (rs.next()) {
                     val record = mapOf(
-                        "SL No" to (rs.getString(1) ?: ""),
-                        "Emp. ID" to (rs.getString(2) ?: ""),
-                        "EMPLOYEE NAME" to (rs.getString(3) ?: ""),
-                        "DESIGNATION" to (rs.getString(7) ?: ""),
-                        "DEPARTMENT" to (rs.getString(8) ?: ""),
-                        "BRANCH NAME" to (rs.getString(9) ?: ""),
-                        "DOJ IN ADHIKAR" to formatDate(rs.getString(10) ?: ""),
+                        "SL No" to (try { rs.getString("MasterData-sl_no_1") } catch (_: Exception) { "" }),
+                        "Emp. ID" to (try { rs.getString("Code_2") } catch (_: Exception) { "" }),
+                        "EMPLOYEE NAME" to (try { rs.getString("employee_name_3") } catch (_: Exception) { "" }),
+                        "DESIGNATION" to (try { rs.getString("designation_7") } catch (_: Exception) { "" }),
+                        "DEPARTMENT" to (try { rs.getString("department_8") } catch (_: Exception) { "" }),
+                        "BRANCH NAME" to (try { rs.getString("branch_name_9") } catch (_: Exception) { "" }),
+                        "DOJ IN ADHIKAR" to formatDate(try { rs.getString("doj_in_adhikar_10") } catch (_: Exception) { "" }),
                         "ADHAR" to "[Redacted]",
-                        "DOJ" to formatDate(rs.getString(9) ?: ""),
-                        "Cont-1" to (rs.getString(14) ?: ""),
-                        "Cont-2" to (rs.getString(15) ?: ""),
-                        "DOB" to formatDate(rs.getString(6) ?: ""),
+                        "DOJ" to formatDate(try { rs.getString("doj_in_adhikar_10") } catch (_: Exception) { "" }),
+                        "Cont-1" to (try { rs.getString("personal_contact_number_14") } catch (_: Exception) { "" }),
+                        "Cont-2" to (try { rs.getString("contact_no_2_15") } catch (_: Exception) { "" }),
+                        "DOB" to formatDate(try { rs.getString("dob_6") } catch (_: Exception) { "" }),
                         "Age" to "",
-                        "Status" to (rs.getString(35) ?: "1")
+                        "Status" to (try { rs.getString("emp_status_35") } catch (_: Exception) { "1" })
                     )
                     allRecords.add(record)
                 }
@@ -49,7 +49,7 @@ object CurrentStaffReportService {
             "CO", "BM", "AM", "CM", "Auditors", "Telecallers", "HO", "MSME", "NPA", "Undefine", "Left"
         )
 
-        val categorizedMap = mutableMapOf<String, MutableList<Map<String, String>>>()
+        val categorizedMap = mutableMapOf<String, MutableList>>()
         for (s in sheetOrder) {
             categorizedMap[s] = mutableListOf()
         }
