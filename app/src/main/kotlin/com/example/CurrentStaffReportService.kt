@@ -1,111 +1,87 @@
 package com.example
 
-import org.apache.poi.ss.usermodel.DataFormatter
-import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.File
-import java.io.InputStream
+import java.sql.Connection
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 object CurrentStaffReportService {
 
-    fun generateAndSaveCurrentStaffReport(inputStream: InputStream, localOutputDir: String): String {
-        val workbook = WorkbookFactory.create(inputStream)
-        val formatter = DataFormatter()
+    fun generateAndSaveReportFromDb(getConnection: () -> Connection?, localOutputDir: String): String {
+        val allRecords = mutableListOf>()
+        val conn = getConnection()
 
-        val activeSheets = listOf("CO", "BM", "AM", "DM-RM", "Audit", "HO", "MSME")
-        val allRecords = mutableListOf<Map<String, String>>()
-
-        // ୧. Active sheets ରୁ ଡାଟା ପଢ଼ିବା
-        for (sheetName in activeSheets) {
-            val sheet = workbook.getSheet(sheetName) ?: continue
-            for (row in sheet) {
-                if (row.rowNum == 0) continue // Header ଛାଡ଼ିବା
-                val slNo = formatter.formatCellValue(row.getCell(0)).trim()
-                if (slNo.isBlank()) continue
-
-                val record = mapOf(
-                    "SL No" to slNo,
-                    "Emp. ID" to formatter.formatCellValue(row.getCell(1)).trim(),
-                    "EMPLOYEE NAME" to formatter.formatCellValue(row.getCell(2)).trim(),
-                    "DESIGNATION" to formatter.formatCellValue(row.getCell(3)).trim(),
-                    "DEPARTMENT" to formatter.formatCellValue(row.getCell(4)).trim(),
-                    "BRANCH NAME" to formatter.formatCellValue(row.getCell(5)).trim(),
-                    "DOJ IN ADHIKAR" to formatDate(formatter.formatCellValue(row.getCell(6))),
-                    "ADHAR" to formatter.formatCellValue(row.getCell(7)).trim(),
-                    "DOJ" to formatDate(formatter.formatCellValue(row.getCell(8))),
-                    "Cont-1" to formatter.formatCellValue(row.getCell(9)).trim(),
-                    "Cont-2" to formatter.formatCellValue(row.getCell(10)).trim(),
-                    "DOB" to formatDate(formatter.formatCellValue(row.getCell(11))),
-                    "Age" to formatter.formatCellValue(row.getCell(12)).trim(),
-                    "Source_Sheet" to sheetName
-                )
-                allRecords.add(record)
+        if (conn != null) {
+            try {
+                // MasterData ଟେବୁଲ୍‌ରୁ ସମସ୍ତ କର୍ମଚାରୀଙ୍କ ତଥ୍ୟ ଫେଚ୍ କରିବା
+                val stmt = conn.createStatement()
+                val rs = stmt.executeQuery("SELECT * FROM MasterData") // ଯଦି ଟେବୁଲ୍ ନାମ ଅଲଗା ଥାଏ, ଏଠାରେ ବଦଲାନ୍ତୁ
+                
+                while (rs.next()) {
+                    val record = mapOf(
+                        "SL No" to (rs.getString("sl_no") ?: ""),
+                        "Emp. ID" to (rs.getString("emp_id") ?: ""),
+                        "EMPLOYEE NAME" to (rs.getString("employee_name") ?: ""),
+                        "DESIGNATION" to (rs.getString("designation") ?: ""),
+                        "DEPARTMENT" to (rs.getString("department") ?: ""),
+                        "BRANCH NAME" to (rs.getString("branch_name") ?: ""),
+                        "DOJ IN ADHIKAR" to formatDate(rs.getString("doj_in_adhikar") ?: ""),
+                        "ADHAR" to "[Redacted]", // ଗୋପନୀୟତା ନିୟମ ଅନੁଯାୟୀ
+                        "DOJ" to formatDate(rs.getString("doj") ?: ""),
+                        "Cont-1" to (rs.getString("cont_1") ?: ""),
+                        "Cont-2" to (rs.getString("cont_2") ?: ""),
+                        "DOB" to formatDate(rs.getString("dob") ?: ""),
+                        "Age" to (rs.getString("age") ?: ""),
+                        "Status" to (rs.getString("emp_status_35") ?: "1") // ଷ୍ଟାଟସ୍ ଯାଞ୍ଚ ପାଇଁ
+                    )
+                    allRecords.add(record)
+                }
+                rs.close()
+                stmt.close()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                try { conn.close() } catch (_: Exception) {}
             }
         }
 
-        // ୨. Left (Inactive) sheet ରୁ ଡାଟା ପଢ଼ିବା
-        val leftSheet = workbook.getSheet("Left")
-        if (leftSheet != null) {
-            for (row in leftSheet) {
-                if (row.rowNum == 0) continue
-                val slNo = formatter.formatCellValue(row.getCell(0)).trim()
-                if (slNo.isBlank()) continue
-
-                val record = mapOf(
-                    "SL No" to slNo,
-                    "Emp. ID" to formatter.formatCellValue(row.getCell(1)).trim(),
-                    "EMPLOYEE NAME" to formatter.formatCellValue(row.getCell(2)).trim(),
-                    "DESIGNATION" to formatter.formatCellValue(row.getCell(3)).trim(),
-                    "DEPARTMENT" to formatter.formatCellValue(row.getCell(4)).trim(),
-                    "BRANCH NAME" to formatter.formatCellValue(row.getCell(5)).trim(),
-                    "DOJ IN ADHIKAR" to formatDate(formatter.formatCellValue(row.getCell(6))),
-                    "ADHAR" to formatter.formatCellValue(row.getCell(7)).trim(),
-                    "DOJ" to formatDate(formatter.formatCellValue(row.getCell(8))),
-                    "Cont-1" to formatter.formatCellValue(row.getCell(9)).trim(),
-                    "Cont-2" to formatter.formatCellValue(row.getCell(10)).trim(),
-                    "DOB" to formatDate(formatter.formatCellValue(row.getCell(11))),
-                    "Age" to formatter.formatCellValue(row.getCell(12)).trim(),
-                    "Source_Sheet" to "Left"
-                )
-                allRecords.add(record)
-            }
-        }
-        workbook.close()
-
-        // ୩. ୧୧ଟି ନିର୍ଦ୍ଦିଷ୍ଟ ଶିଟ୍ କ୍ରମରେ କାଟାଗୋରାଇଜ୍ କରିବା
+        // ୧୧ଟି ନିର୍ଦ୍ଦିଷ୍ଟ ଶିଟ୍ କ୍ରମରେ କାଟାଗୋରାଇଜ୍ କରିବା
         val sheetOrder = listOf(
             "CO", "BM", "AM", "CM", "Auditors", "Telecallers", "HO", "MSME", "NPA", "Undefine", "Left"
         )
 
-        val categorizedMap = mutableMapOf<String, MutableList<Map<String, String>>>()
+        val categorizedMap = mutableMapOf<String, MutableList>>()
         for (s in sheetOrder) {
             categorizedMap[s] = mutableListOf()
         }
 
         for (rec in allRecords) {
-            val sourceSheet = rec["Source_Sheet"] ?: ""
+            val status = rec["Status"] ?: "1"
             val desig = rec["DESIGNATION"]?.lowercase() ?: ""
             val dept = rec["DEPARTMENT"]?.lowercase() ?: ""
 
-            val assigned = when {
-                sourceSheet.equals("Left", ignoreCase = true) -> "Left"
-                dept.contains("npa") -> "NPA"
-                desig.contains("tele") || dept.contains("tele") -> "Telecallers"
-                desig.contains("credit officer") -> "CO"
-                desig.contains("branch manager") || desig.contains("branch incharge") || desig.contains("assistant branch manager") -> "BM"
-                desig.contains("area manager") -> "AM"
-                desig.contains("cluster manager") -> "CM"
-                desig.contains("audit") || desig.contains("ia") || desig.contains("auditor") -> "Auditors"
-                desig.contains("msme") || dept.contains("msme") -> "MSME"
-                sourceSheet.equals("HO", ignoreCase = true) -> "HO"
-                else -> "Undefine"
+            // ଯଦି ଷ୍ଟାଟସ୍ 0 ଅଛି କିମ୍ବା Left ତାଲିକାରେ ଅଛି
+            val assigned = if (status == "0") {
+                "Left"
+            } else {
+                when {
+                    dept.contains("npa") -> "NPA"
+                    desig.contains("tele") || dept.contains("tele") -> "Telecallers"
+                    desig.contains("credit officer") -> "CO"
+                    desig.contains("branch manager") || desig.contains("branch incharge") || desig.contains("assistant branch manager") -> "BM"
+                    desig.contains("area manager") -> "AM"
+                    desig.contains("cluster manager") -> "CM"
+                    desig.contains("audit") || desig.contains("ia") || desig.contains("auditor") -> "Auditors"
+                    desig.contains("msme") || dept.contains("msme") -> "MSME"
+                    dept.contains("ho") || dept.contains("head office") -> "HO"
+                    else -> "Undefine"
+                }
             }
             categorizedMap[assigned]?.add(rec)
         }
 
-        // ୪. ନୂଆ ଏକ୍ସେଲ୍ ଫାଇଲ୍ ତିଆରି କରିବା (Stafflist + DDMMYYYY.xlsx)
+        // ନୂଆ ଏକ୍ସେଲ୍ ଫାଇଲ୍ ତିଆରି କରିବା
         val newWb = XSSFWorkbook()
         val headers = listOf("SL No", "Emp ID", "Employee Name", "Designation", "Department", "Branch Name", "DOJ in Adhikar", "Aadhar", "DOJ", "Contact 1", "Contact 2", "DOB", "Age")
         val keys = listOf("SL No", "Emp. ID", "EMPLOYEE NAME", "DESIGNATION", "DEPARTMENT", "BRANCH NAME", "DOJ IN ADHIKAR", "ADHAR", "DOJ", "Cont-1", "Cont-2", "DOB", "Age")
@@ -114,13 +90,11 @@ object CurrentStaffReportService {
             val ws = newWb.createSheet(sName)
             val rowsList = categorizedMap[sName] ?: emptyList()
 
-            // Header Row
             val headerRow = ws.createRow(0)
             for (i in headers.indices) {
                 headerRow.createCell(i).setCellValue(headers[i])
             }
 
-            // Data Rows
             var rIdx = 1
             for (rowMap in rowsList) {
                 val dataRow = ws.createRow(rIdx++)
@@ -131,15 +105,13 @@ object CurrentStaffReportService {
             }
         }
 
-        // ୫. ଫାଇଲ୍ ନାମ ଏବଂ ସେଭ୍ କରିବା (Local + Google Drive path)
+        // ଫାଇଲ୍ ନାମ ଏବଂ ସେଭ୍ କରିବା (Stafflist + DDMMYYYY.xlsx)
         val dateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("ddMMyyyy"))
         val fileName = "Stafflist$dateStr.xlsx"
 
-        // ଲୋକାଲ୍ ଡାଇରେକ୍ଟରି
         val targetFile = File(localOutputDir, fileName)
         targetFile.parentFile?.mkdirs()
-        
-        // ଗୁଗଲ୍ ଡ୍ରାଇଭ୍ ସିଙ୍କ୍ ଡାଇରେକ୍ଟରି (ଯଦି Google Drive desktop app ଲୋକାଲ୍ କମ୍ପ୍ୟୁଟରରେ ସିଙ୍କ୍ ହେଉଥାଏ)
+
         val googleDriveDir = File(System.getProperty("user.home") + File.separator + "Google Drive" + File.separator + "StaffReports")
         googleDriveDir.mkdirs()
         val driveFile = File(googleDriveDir, fileName)
