@@ -235,7 +235,7 @@ fun Route.employeeVerificationRoute() {
                         val dbEmpId = try { rs.getString("Code_2") ?: rs.getString("code") ?: rs.getString("emp_id") } catch (_: Exception) { "" }
                         val dbEmpName = try { rs.getString("employee_name_3") ?: rs.getString("employee_name") } catch (_: Exception) { "" }
                         val dbFatherName = try { rs.getString("fathers_name_4") ?: rs.getString("fathers_name") } catch (_: Exception) { "" }
-                        val dbBranch = try { rs.getString("branch_name_9") ?: rs.getString("branchnmae") } catch (_: Exception) { "" }
+                        val dbBranch = try { rs.getString("branch_name_9") ?: rs.getString("branchname") } catch (_: Exception) { "" }
                         val dbPan = try { rs.getString("pan_card_no_17") ?: rs.getString("pan") } catch (_: Exception) { "" }
                         val dbAadhar = try { rs.getString("aadhar_card_no_16") ?: rs.getString("aadhar") } catch (_: Exception) { "" }
                         val dbAccount = try { rs.getString("bank_account_number_20") ?: rs.getString("account_no") } catch (_: Exception) { "" }
