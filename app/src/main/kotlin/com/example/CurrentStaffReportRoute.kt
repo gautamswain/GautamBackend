@@ -7,12 +7,14 @@ import io.ktor.http.*
 import java.io.File
 
 fun Route.currentStaffReportRouting() {
-    // ଏବେ ଏହା ଏକ GET ଏଣ୍ଡପ୍ଏଣ୍ଟ୍ ଯାହା ସିଧାସଳଖ ଡାଟାବେସ୍‌ରୁ ରିପୋର୍ଟ ତିଆରି କରିବ
     get("/api/turso/generate-current-staff-report") {
         try {
-            val localDir = System.getProperty("user.home") + File.separator + "AdhikarStaffReports"
+            val localDir = if (System.getProperty("os.name").lowercase().contains("linux")) {
+                "/root/AdhikarStaffReports"
+            } else {
+                System.getProperty("user.home") + File.separator + "AdhikarStaffReports"
+            }
             
-            // ଡାଟାବେସ୍‌ରୁ ତଥ୍ୟ ନେଇ ରିପୋର୍ଟ ଜେନେରେଟ୍ କରିବା
             val savedFilePath = CurrentStaffReportService.generateAndSaveReportFromDb(
                 { TursoDatabaseService.getConnection() }, 
                 localDir
@@ -28,6 +30,33 @@ fun Route.currentStaffReportRouting() {
                 "status" to "error",
                 "message" to (e.localizedMessage ?: "Unknown error")
             ))
+        }
+    }
+
+    get("/api/turso/download-latest-staff-report") {
+        try {
+            val dirPath = if (System.getProperty("os.name").lowercase().contains("linux")) {
+                "/root/AdhikarStaffReports"
+            } else {
+                System.getProperty("user.home") + File.separator + "AdhikarStaffReports"
+            }
+            
+            val dir = File(dirPath)
+            if (!dir.exists()) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Reports directory not found"))
+                return@get
+            }
+
+            val latestFile = dir.listFiles { _, name -> name.startsWith("Stafflist") && name.endsWith(".xlsx") }
+                ?.maxByOrNull { it.lastModified() }
+
+            if (latestFile != null && latestFile.exists()) {
+                call.respondFile(latestFile)
+            } else {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "No report file found"))
+            }
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
         }
     }
 }
