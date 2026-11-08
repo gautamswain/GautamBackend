@@ -36,7 +36,7 @@ fun Route.configureSalaryRoutes() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "query_failed"))
             return@get
         }
-        call.respond(HttpStatusCode.OK, payload)   // order matches history
+        call.respond(HttpStatusCode.OK, payload)
     }
 }
 
@@ -46,30 +46,27 @@ private fun fetchSalaries(ids: List<String>): List<SalaryDto> {
     val conn = TursoDatabaseService.getConnection()
         ?: throw IllegalStateException("Database connection failed")
 
+    // SQL Injection ରୋକିବା ପାଇଁ କେବଳ alphanumeric/numeric ID କୁ ଅନୁମତି ଦେବା
+    val safeIds = ids.map { it.trim().replace("'", "") }.filter { it.isNotEmpty() }
+    if (safeIds.isEmpty()) return emptyList()
+
+    // '?' ବଦଳରେ ସିଧାସଳଖ '26594','26827','27067' ଫର୍ମାଟ୍ ତିଆରି କରିବା
+    val inClause = safeIds.joinToString(",") { "'$it'" }
+    val sql = "SELECT * FROM SalaryHistory WHERE CAST(id AS TEXT) IN ($inClause)"
+
     val results = mutableListOf<SalaryDto>()
-    
-    // Dynamic placeholders (e.g., ?, ?, ?) ତିଆରି କରିବା
-    val placeholders = ids.joinToString(",") { "?" }
-    val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
 
-    conn.use {
-        it.prepareStatement(sql).use { pstmt ->
-            // id ପାଇଁ ପାରାମିଟରଗୁଡ଼ିକ ସେଟ୍ କରିବା
-            ids.forEachIndexed { index, id ->
-                pstmt.setString(index + 1, id.trim())
-            }
-
-            pstmt.executeQuery().use { rs ->
+    conn.use { connection ->
+        connection.createStatement().use { stmt ->
+            stmt.executeQuery(sql).use { rs ->
                 while (rs.next()) {
                     results.add(parseSalaryDto(rs))
                 }
             }
         }
     }
-    
-    // ଇନପୁଟ୍ ଅର୍ଡର୍ (order) ଅନୁସାରେ ଡାଟା ସଜାଡ଼ିବା
-    val byId = results.associateBy { it.id }
-    return ids.mapNotNull { id ->
-        byId[id]
-    }
+
+    // ୟୁଜର୍ ଦେଇଥିବା ଇନପୁଟ୍ ଅର୍ଡର୍ (order) ଅନୁସାରେ ଡାଟା ସଜାଡ଼ିବା
+    val byId = results.associateBy { it.id.trim() }
+    return safeIds.mapNotNull { id -> byId[id] }
 }
