@@ -18,6 +18,7 @@ import io.ktor.server.request.path
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -65,13 +66,20 @@ fun Application.module() {
     val driveService = GoogleDriveService(clientId, clientSecret, refreshToken)
 
     routing {
-        get("/") { 
-            call.respondText("Welcome to Ktor Backend!") 
+        // HTML ପେଜ୍ ସିଧାସଳଖ ସର୍ଭରରୁ ଲୋଡ୍ ହେବ
+        get("/") {
+            val file = File("IndexReport.html")
+            if (file.exists()) {
+                call.respondFile(file)
+            } else {
+                call.respondText("IndexReport.html not found on server directory.")
+            }
         }
-	branchDetailsUpdateRouting()
+
+        branchDetailsUpdateRouting()
         newJoiningRouting()
         employeeVerificationRoute()
-        commentsQueueRoute() // Registered queue route for adding verified employees to Comments table
+        commentsQueueRoute() 
         currentStaffReportRouting() // Registered Current Staff List report generation route
 
         // Test Drive Upload Endpoint
