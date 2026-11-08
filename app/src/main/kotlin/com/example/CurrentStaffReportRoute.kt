@@ -4,26 +4,14 @@ import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.http.*
-import java.io.File
 
 fun Route.currentStaffReportRouting() {
+    // 1. ରିପୋର୍ଟ ଜେନେରେଟ୍ କରିବା ପାଇଁ ରାଉଟ୍ (ଯଦି ଦରକାର ହୁଏ)
     get("/api/turso/generate-current-staff-report") {
         try {
-            val localDir = if (System.getProperty("os.name").lowercase().contains("linux")) {
-                "/root/AdhikarStaffReports"
-            } else {
-                System.getProperty("user.home") + File.separator + "AdhikarStaffReports"
-            }
-            
-            val savedFilePath = CurrentStaffReportService.generateAndSaveReportFromDb(
-                { TursoDatabaseService.getConnection() }, 
-                localDir
-            )
-
             call.respond(HttpStatusCode.OK, mapOf(
                 "status" to "success",
-                "message" to "Report generated successfully from MasterData in Database.",
-                "path" to savedFilePath
+                "message" to "Ready for direct download."
             ))
         } catch (e: Exception) {
             call.respond(HttpStatusCode.InternalServerError, mapOf(
@@ -33,30 +21,30 @@ fun Route.currentStaffReportRouting() {
         }
     }
 
+    // 2. ସର୍ଭରରେ ସେଭ୍ ନକରି ସିଧାସଳଖ ଡାଉନଲୋଡ୍ କରିବା ପାଇଁ ରାଉଟ୍
     get("/api/turso/download-latest-staff-report") {
         try {
-            val dirPath = if (System.getProperty("os.name").lowercase().contains("linux")) {
-                "/root/AdhikarStaffReports"
-            } else {
-                System.getProperty("user.home") + File.separator + "AdhikarStaffReports"
+            // ଡାଟାବେସ୍‌ରୁ ଡାଟା ଆଣಿ ମେମୋରୀ (Bytes) ରେ ଏକ୍ସେଲ୍ ତିଆରି କରିବା
+            val excelBytes = CurrentStaffReportService.generateReportBytesFromDb { 
+                TursoDatabaseService.getConnection() 
             }
+
+            // ବ୍ରାଉଜର୍‌କୁ ଡାଉନଲୋଡ୍ ହେବା ପାଇଁ ହେଡର୍ ସେଟ୍ କରିବା
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(
+                    ContentDisposition.Parameters.FileName, 
+                    "Stafflist.xlsx"
+                ).toString()
+            )
             
-            val dir = File(dirPath)
-            if (!dir.exists()) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Reports directory not found"))
-                return@get
-            }
-
-            val latestFile = dir.listFiles { _, name -> name.startsWith("Stafflist") && name.endsWith(".xlsx") }
-                ?.maxByOrNull { it.lastModified() }
-
-            if (latestFile != null && latestFile.exists()) {
-                call.respondFile(latestFile)
-            } else {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "No report file found"))
-            }
+            // ସିଧାସଳଖ ବ୍ରାଉଜର୍‌ର ଡାଉନଲୋଡ୍ ଫୋଲ୍ଡର୍‌କୁ ପଠାଇବା
+            call.respondBytes(excelBytes, ContentType.Application.OctetStream)
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+            call.respond(
+                HttpStatusCode.InternalServerError, 
+                mapOf("error" to (e.localizedMessage ?: "Unknown error"))
+            )
         }
     }
 }
