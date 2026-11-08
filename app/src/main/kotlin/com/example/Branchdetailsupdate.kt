@@ -66,39 +66,66 @@ fun Route.branchDetailsUpdateRouting() {
                     // Turso Database Connection 
                     val conn = TursoDatabaseService.getConnection()
 
+                    // ଡାଟାବେସ୍‌ରୁ ସମସ୍ତ ବ୍ରାଞ୍ଚ ନାମ ଫେଚ୍ କରି ଏକ ମ୍ୟାପ୍ ପ୍ରସ୍ତୁତ କରିବା (ସ୍ପେଲିଂ/ଡଟ୍/କେସ୍ ସମସ୍ୟା ଦୂର କରିବା ପାଇଁ)
+                    val dbBranchMap = mutableMapOf<String, String>() // normalizedKey -> exactBranchName
+                    if (conn != null) {
+                        try {
+                            val stmt = conn.createStatement()
+                            val rs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
+                            while (rs.next()) {
+                                val bName = rs.getString("branchname")?.trim() ?: ""
+                                if (bName.isNotBlank()) {
+                                    val normalizedKey = bName.lowercase().replace(Regex("[^a-z0-9]"), "")
+                                    dbBranchMap[normalizedKey] = bName
+                                }
+                            }
+                            rs.close()
+                            stmt.close()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+
                     for (rowIndex in startRow..endRow) {
                         val row = sheet.getRow(rowIndex) ?: continue
                         val colA = formatter.formatCellValue(row.getCell(0)).trim()
                         val colB = formatter.formatCellValue(row.getCell(1)).trim()
                         val colC = formatter.formatCellValue(row.getCell(2)).trim()
 
-                        val matchedBranch = oToNMap[colB] ?: ""
+                        val rawMatchedBranch = oToNMap[colB] ?: ""
                         val updatedKField = lToKMap[colC] ?: ""
 
                         var updateStatus = "Skipped"
 
-                        if (matchedBranch.isBlank()) {
+                        if (rawMatchedBranch.isBlank()) {
                             updateStatus = "MatchedBranch is Blank (Col B: $colB)"
                         } else if (updatedKField.isBlank()) {
                             updateStatus = "UpdatedKField is Blank (Col C: $colC)"
                         } else if (conn == null) {
                             updateStatus = "DB Connection Failed"
                         } else {
-                            try {
-                                val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
-                                val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE LOWER(TRIM(branchname)) = LOWER(TRIM(?))"
-                                
-                                val pstmt = conn.prepareStatement(sql)
-                                pstmt.setString(1, colA)
-                                pstmt.setString(2, matchedBranch)
-                                
-                                val rowsAffected = pstmt.executeUpdate()
-                                pstmt.close()
+                            // ନର୍ମାଲାଇଜ୍ କରି ଡାଟାବେସ୍‌ରୁ ସଠିକ୍ ବ୍ରାଞ୍ଚ ନାମ ଖୋଜିବା
+                            val lookupKey = rawMatchedBranch.lowercase().replace(Regex("[^a-z0-9]"), "")
+                            val exactDbBranch = dbBranchMap[lookupKey]
 
-                                updateStatus = if (rowsAffected > 0) "Updated Successfully ($rowsAffected row)" else "Branch Not Found: '$matchedBranch'"
-                            } catch (e: Exception) {
-                                // Capture full exception details instead of null localized message
-                                updateStatus = "Error: ${e.toString()} [${e.javaClass.simpleName}]"
+                            if (exactDbBranch.isNullOrBlank()) {
+                                updateStatus = "Branch Not Found in DB: '$rawMatchedBranch'"
+                            } else {
+                                try {
+                                    val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
+                                    val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE branchname = ?"
+                                    
+                                    val pstmt = conn.prepareStatement(sql)
+                                    pstmt.setString(1, colA)
+                                    pstmt.setString(2, exactDbBranch)
+                                    
+                                    val rowsAffected = pstmt.executeUpdate()
+                                    pstmt.close()
+
+                                    updateStatus = if (rowsAffected > 0) "Updated Successfully ($exactDbBranch)" else "Update Failed for '$exactDbBranch'"
+                                } catch (e: Exception) {
+                                    updateStatus = "Error: ${e.toString()} [${e.javaClass.simpleName}]"
+                                }
                             }
                         }
 
@@ -108,7 +135,7 @@ fun Route.branchDetailsUpdateRouting() {
                                 columnA = colA,
                                 columnB = colB,
                                 columnC = colC,
-                                matchedBranch = matchedBranch,
+                                matchedBranch = rawMatchedBranch,
                                 updatedKField = updatedKField,
                                 dbUpdateStatus = updateStatus
                             )
