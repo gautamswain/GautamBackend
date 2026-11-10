@@ -1,106 +1,98 @@
 package com.example
 
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.sql.Connection
 
+@Serializable
+data class ReportResult(
+    val status: String,
+    val idRecord: String,
+    val totalUniqueCodes: Int,
+    val codes: List<String>
+)
+
 object ReportMeService {
 
-    fun generateAndSaveReport(conn: Connection, empId: String): Map<String, Any> {
-        var uniqueCode = ""
-        val monthsList = mutableListOf<Map<String, String>>()
-        val codesList = mutableListOf<String>()
-
-        conn.use { connection ->
-            // କେବଳ emp_id_2 ବ୍ୟବହାର କରାଗଲା ଯେପରି କୌଣସି missing column ଏରର୍ ନ ଆସେ
-            val query = "SELECT * FROM SalaryHistory WHERE emp_id_2 = ? ORDER BY rowid DESC LIMIT 2"
-            val pstmt = connection.prepareStatement(query)
-            pstmt.setString(1, empId)
+    fun last_two_month_all_code(conn: Connection): List<String> {
+        val uniqueCodes = mutableSetOf<String>()
+        val query = "SELECT * FROM SalaryHistory ORDER BY rowid DESC"
+        
+        conn.prepareStatement(query).use { pstmt ->
             val rs = pstmt.executeQuery()
-
-            val rows = mutableListOf<Map<String, String>>()
+            val allRows = mutableListOf<Map<String, String>>()
+            
             while (rs.next()) {
                 val map = mutableMapOf<String, String>()
                 val meta = rs.metaData
                 for (i in 1..meta.columnCount) {
                     map[meta.getColumnName(i).lowercase()] = rs.getString(i) ?: ""
                 }
-                rows.add(map)
+                allRows.add(map)
             }
             rs.close()
-            pstmt.close()
-
-            if (rows.isNotEmpty()) {
-                val lastRow = rows[0]
-                val lastMonth = lastRow["month"] ?: ""
-                val lastCode = lastRow["salary_code"] ?: lastRow["id"] ?: lastRow["sl_no_1"] ?: ""
-
-                monthsList.add(mapOf("month" to lastMonth, "code" to lastCode))
-                codesList.add(lastCode)
-
-                if (rows.size > 1) {
-                    val prevRow = rows[1]
-                    val prevMonth = prevRow["month"] ?: ""
-                    val prevCode = prevRow["salary_code"] ?: prevRow["id"] ?: prevRow["sl_no_1"] ?: ""
-                    
-                    monthsList.add(mapOf("month" to prevMonth, "code" to prevCode))
-                    codesList.add(prevCode)
-                    
-                    uniqueCode = "UNIQ_${lastCode}_${prevCode}"
-                } else {
-                    uniqueCode = "UNIQ_${lastCode}_SINGLE"
+            
+            val distinctMonths = allRows.mapNotNull { it["month"] }.distinct().take(2)
+            
+            for (row in allRows) {
+                val month = row["month"] ?: ""
+                if (month in distinctMonths) {
+                    val code = row["salary_code"] ?: row["emp_id_2"] ?: row["id"] ?: ""
+                    if (code.isNotBlank()) {
+                        uniqueCodes.add(code.trim())
+                    }
                 }
             }
+        }
+        return uniqueCodes.toList()
+    }
 
-            // 'a' record JSON format (Full details)
-            val aRecordMap = mapOf(
-                "empId" to empId,
-                "uniqueCode" to uniqueCode,
-                "monthsData" to monthsList
-            )
-            val aRecordJson = Json.encodeToString(aRecordMap)
+    // x = "1" (1 no record), y = codes list JSON for "a" field
+    fun generateAndSaveReport(conn: Connection, x: String, y: String) {
+        val insertQuery = """
+            INSERT INTO reports (emp_id, a) 
+            VALUES (?, ?)
+            ON CONFLICT(emp_id) DO UPDATE SET 
+            a = excluded.a
+        """
+        
+        val fallbackInsert = "INSERT INTO reports (emp_id, a) VALUES (?, ?)"
+        
+        try {
+            val insertStmt = conn.prepareStatement(insertQuery)
+            insertStmt.setString(1, x)
+            insertStmt.setString(2, y)
+            insertStmt.executeUpdate()
+            insertStmt.close()
+        } catch (_: Exception) {
+            val insertStmt = conn.prepareStatement(fallbackInsert)
+            insertStmt.setString(1, x)
+            insertStmt.setString(2, y)
+            insertStmt.executeUpdate()
+            insertStmt.close()
+        }
+    }
 
-            // 'm' record JSON format (Only codes)
-            val mRecordMap = mapOf(
-                "codes" to codesList
-            )
-            val mRecordJson = Json.encodeToString(mRecordMap)
+    fun generateAndSaveReport(conn: Connection): ReportResult = processAndSave(conn)
 
-            // Insert or Update into 'reports' table
-            val insertQuery = """
-                INSERT INTO reports (emp_id, cr, m, unique_code) 
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(emp_id) DO UPDATE SET 
-                cr = excluded.cr, 
-                m = excluded.m,
-                unique_code = excluded.unique_code
-            """
+    fun processAndSave(conn: Connection): ReportResult {
+        var codesList = listOf<String>()
+        
+        conn.use { connection ->
+            codesList = last_two_month_all_code(connection)
             
-            val fallbackInsert = "INSERT INTO reports (emp_id, cr, m, unique_code) VALUES (?, ?, ?, ?)"
+            val x = "1" // 1 no record
+            val y = Json.encodeToString(codesList) // codes list as JSON for 'a' field
             
-            try {
-                val insertStmt = connection.prepareStatement(insertQuery)
-                insertStmt.setString(1, empId)
-                insertStmt.setString(2, aRecordJson) // cr field gets 'a' record
-                insertStmt.setString(3, mRecordJson) // m field gets only codes json
-                insertStmt.setString(4, uniqueCode)
-                insertStmt.executeUpdate()
-                insertStmt.close()
-            } catch (_: Exception) {
-                val insertStmt = connection.prepareStatement(fallbackInsert)
-                insertStmt.setString(1, empId)
-                insertStmt.setString(2, aRecordJson)
-                insertStmt.setString(3, mRecordJson)
-                insertStmt.setString(4, uniqueCode)
-                insertStmt.executeUpdate()
-                insertStmt.close()
-            }
+            generateAndSaveReport(connection, x, y)
         }
 
-        return mapOf(
-            "empId" to empId,
-            "uniqueCode" to uniqueCode,
-            "codes" to codesList
+        return ReportResult(
+            status = "success",
+            idRecord = "1",
+            totalUniqueCodes = codesList.size,
+            codes = codesList
         )
     }
 }
