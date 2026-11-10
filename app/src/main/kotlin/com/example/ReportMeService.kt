@@ -10,7 +10,9 @@ data class ReportResult(
     val status: String,
     val idRecord: String,
     val totalUniqueCodes: Int,
-    val codes: List<String>
+    val codes: List<String>,
+    val totalMasterActive: Int = 0,
+    val masterActiveCodes: List<String> = emptyList()
 )
 
 object ReportMeService {
@@ -46,23 +48,62 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
-    fun generateAndSaveReport(conn: Connection, x: String, y: String) {
+    // MasterData ru emp_status_35 = 1 thiba employee code aniba function
+    fun Master_Active(conn: Connection): List<String> {
+        val activeCodes = mutableSetOf<String>()
+        
+        conn.createStatement().use { stmt ->
+            // Prathame emp_id_2 column check kariba, na thile fallback re dynamic column khojiba
+            try {
+                val query = "SELECT emp_id_2 FROM MasterData WHERE emp_status_35 = '1' OR emp_status_35 = 1"
+                val rs = stmt.executeQuery(query)
+                while (rs.next()) {
+                    val code = rs.getString(1) ?: ""
+                    if (code.isNotBlank() && code != "0") {
+                        activeCodes.add(code.trim())
+                    }
+                }
+                rs.close()
+            } catch (_: Exception) {
+                val rs = stmt.executeQuery("SELECT * FROM MasterData WHERE emp_status_35 = '1' OR emp_status_35 = 1")
+                val meta = rs.metaData
+                var codeColIndex = 1
+                for (i in 1..meta.columnCount) {
+                    val colName = meta.getColumnName(i).lowercase()
+                    if (colName.contains("emp_id") || colName.contains("code")) {
+                        codeColIndex = i
+                        break
+                    }
+                }
+                while (rs.next()) {
+                    val code = rs.getString(codeColIndex) ?: ""
+                    if (code.isNotBlank() && code != "0") {
+                        activeCodes.add(code.trim())
+                    }
+                }
+                rs.close()
+            }
+        }
+        return activeCodes.toList()
+    }
+
+    // Kounasi bi निर्दिष्ट field ('a' ba 'b') re save kariba pain
+    fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
         val safeY = y.replace("'", "''")
         
-        // Table schema anujayi 'id' ba 'emp_id' re update/insert heba
         conn.createStatement().use { stmt ->
             try {
-                // Prathame 'id' column (screenshot anujayi id = 1) re update chesta kariba
-                val updated = stmt.executeUpdate("UPDATE reports SET a = '$safeY' WHERE id = '$safeX'")
+                // Prathame 'id' column (id = 1) re update chesta kariba
+                val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE id = '$safeX'")
                 if (updated == 0) {
-                    stmt.executeUpdate("INSERT INTO reports (id, cr, a) VALUES ('$safeX', 'm', '$safeY')")
+                    stmt.executeUpdate("INSERT INTO reports (id, cr, $fieldName) VALUES ('$safeX', 'm', '$safeY')")
                 }
             } catch (_: Exception) {
                 // Yadi column nama 'emp_id' thaye, tahale ethire save heba
-                val updated = stmt.executeUpdate("UPDATE reports SET a = '$safeY' WHERE emp_id = '$safeX'")
+                val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE emp_id = '$safeX'")
                 if (updated == 0) {
-                    stmt.executeUpdate("INSERT INTO reports (emp_id, a) VALUES ('$safeX', '$safeY')")
+                    stmt.executeUpdate("INSERT INTO reports (emp_id, $fieldName) VALUES ('$safeX', '$safeY')")
                 }
             }
         }
@@ -72,21 +113,29 @@ object ReportMeService {
 
     fun processAndSave(conn: Connection): ReportResult {
         var codesList = listOf<String>()
+        var activeList = listOf<String>()
         
         conn.use { connection ->
-            codesList = last_two_month_all_code(connection)
-            
             val x = "1" // 1 no record
-            val y = Json.encodeToString(codesList) // codes list as JSON for 'a' field
             
-            generateAndSaveReport(connection, x, y)
+            // 1. SalaryHistory last two months -> 1a ('a' field of record 1)
+            codesList = last_two_month_all_code(connection)
+            val yA = Json.encodeToString(codesList)
+            generateAndSaveReport(connection, x, yA, "a")
+            
+            // 2. MasterData emp_status_35 = 1 -> 1b ('b' field of record 1)
+            activeList = Master_Active(connection)
+            val yB = Json.encodeToString(activeList)
+            generateAndSaveReport(connection, x, yB, "b")
         }
 
         return ReportResult(
             status = "success",
             idRecord = "1",
             totalUniqueCodes = codesList.size,
-            codes = codesList
+            codes = codesList,
+            totalMasterActive = activeList.size,
+            masterActiveCodes = activeList
         )
     }
 }
