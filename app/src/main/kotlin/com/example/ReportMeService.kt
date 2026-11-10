@@ -57,7 +57,8 @@ object ReportMeService {
         val activeCodes = mutableSetOf<String>()
         conn.createStatement().use { stmt ->
             try {
-                val rs = stmt.executeQuery("SELECT Code_2 FROM MasterData")
+                val query = "SELECT Code_2 FROM MasterData WHERE emp_status_35 = '1' OR emp_status_35 = 1"
+                val rs = stmt.executeQuery(query)
                 while (rs.next()) {
                     val code = rs.getString(1) ?: ""
                     if (code.isNotBlank() && code != "0") {
@@ -67,17 +68,9 @@ object ReportMeService {
                 rs.close()
             } catch (_: Exception) {
                 try {
-                    val rs = stmt.executeQuery("SELECT * FROM MasterData")
-                    val meta = rs.metaData
-                    var codeIdx = 1
-                    for (i in 1..meta.columnCount) {
-                        if (meta.getColumnName(i).lowercase().contains("code") || meta.getColumnName(i).lowercase().contains("emp_id")) {
-                            codeIdx = i
-                            break
-                        }
-                    }
+                    val rs = stmt.executeQuery("SELECT Code_2 FROM MasterData")
                     while (rs.next()) {
-                        val code = rs.getString(codeIdx) ?: ""
+                        val code = rs.getString(1) ?: ""
                         if (code.isNotBlank() && code != "0") {
                             activeCodes.add(code.trim())
                         }
@@ -104,10 +97,9 @@ object ReportMeService {
         return list1b.filter { it !in setA }.distinct()
     }
 
-    // 1f: Branchwisedata using 1b codes as base, BranchDetails sequence, and exact designation priority
-    fun Branchwisedata(conn: Connection, activeCodes: List<String>): List<String> {
+    // 1f: Branchwisedata
+    fun Branchwisedata(conn: Connection): List<String> {
         val sortedCodes = mutableListOf<String>()
-        if (activeCodes.isEmpty()) return sortedCodes
         
         conn.createStatement().use { stmt ->
             // 1. Fetch exact branch sequence from BranchDetails
@@ -123,38 +115,29 @@ object ReportMeService {
                 branchRs.close()
             } catch (_: Exception) {}
 
-            // 2. Fetch employee details from MasterData for codes present in 1b (activeCodes)
+            // 2. Fetch Code_2, designation_7, branch_name_9 from MasterData where active
             val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
             try {
-                val empRs = stmt.executeQuery("SELECT Code_2, designation_7, branch_name_9 FROM MasterData")
+                val empRs = stmt.executeQuery("SELECT Code_2, designation_7, branch_name_9 FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
                 while (empRs.next()) {
                     val empId = (empRs.getString(1) ?: "").trim()
                     val designation = (empRs.getString(2) ?: "").trim().lowercase()
                     val branch = (empRs.getString(3) ?: "").trim()
                     
-                    // Only process if code exists in 1b and not Head Office
-                    if (empId in activeCodes && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
+                    if (empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
                         employeeList.add(Triple(empId, designation, branch))
                     }
                 }
                 empRs.close()
             } catch (_: Exception) {
                 try {
-                    val empRs = stmt.executeQuery("SELECT * FROM MasterData")
-                    val meta = empRs.metaData
-                    var idIdx = 1; var desIdx = 2; var branchIdx = 3
-                    for (i in 1..meta.columnCount) {
-                        val name = meta.getColumnName(i).lowercase()
-                        if (name.contains("code_2") || name.contains("code") || name.contains("emp_id")) idIdx = i
-                        if (name.contains("designation")) desIdx = i
-                        if (name.contains("branch")) branchIdx = i
-                    }
+                    val empRs = stmt.executeQuery("SELECT Code_2, designation_7, branch_name_9 FROM MasterData")
                     while (empRs.next()) {
-                        val empId = (empRs.getString(idIdx) ?: "").trim()
-                        val designation = (empRs.getString(desIdx) ?: "").trim().lowercase()
-                        val branch = (empRs.getString(branchIdx) ?: "").trim()
+                        val empId = (empRs.getString(1) ?: "").trim()
+                        val designation = (empRs.getString(2) ?: "").trim().lowercase()
+                        val branch = (empRs.getString(3) ?: "").trim()
                         
-                        if (empId in activeCodes && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
+                        if (empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
                             employeeList.add(Triple(empId, designation, branch))
                         }
                     }
@@ -162,21 +145,22 @@ object ReportMeService {
                 } catch (_: Exception) {}
             }
 
+            // Create map for branch sequence index lookup (ignoring case)
             val branchIndexMap = branchSequence.mapIndexed { index, name -> name.lowercase() to index }.toMap()
 
-            // 3. Sorting: BranchDetails sequence index first, then designation priority (CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            // 3. Sorting by BranchDetails sequence + Designation priority (CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
             val sortedEmployees = employeeList.sortedWith(compareBy(
                 { emp -> branchIndexMap[emp.third.lowercase()] ?: 999 },
                 { emp -> 
                     val des = emp.second
                     when {
                         des.contains("co") && !des.contains("sco") -> 1
-                        des.contains("sco") || des.contains("senior credit officer") -> 2
-                        des.contains("abm") || des.contains("assistant branch manager") -> 3
+                        des.contains("sco") -> 2
+                        des.contains("abm") -> 3
                         des.contains("bm") && !des.contains("sbm") -> 4
-                        des.contains("sbm") || des.contains("senior branch manager") -> 5
-                        des.contains("am") || des.contains("area manager") -> 6
-                        des.contains("cm") || des.contains("cluster manager") -> 7
+                        des.contains("sbm") -> 5
+                        des.contains("am") -> 6
+                        des.contains("cm") -> 7
                         else -> 99
                     }
                 }
@@ -234,7 +218,7 @@ object ReportMeService {
             recentJoinedList = Recent_Joined(codesList, activeList)
             generateAndSaveReport(connection, x, Json.encodeToString(recentJoinedList), "e")
 
-            branchwiseList = Branchwisedata(connection, activeList)
+            branchwiseList = Branchwisedata(connection)
             generateAndSaveReport(connection, x, Json.encodeToString(branchwiseList), "f")
         }
 
