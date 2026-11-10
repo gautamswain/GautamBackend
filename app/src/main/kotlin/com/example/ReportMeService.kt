@@ -45,28 +45,20 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
+    // ON CONFLICT badhaigala, prathame delete kari ki insert karajigala jaha sabu database re support kare
     fun generateAndSaveReport(conn: Connection, x: String, y: String) {
-        val insertQuery = """
-            INSERT INTO reports (emp_id, a) 
-            VALUES (?, ?)
-            ON CONFLICT(emp_id) DO UPDATE SET 
-            a = excluded.a
-        """
+        val deleteQuery = "DELETE FROM reports WHERE emp_id = ?"
+        val insertQuery = "INSERT INTO reports (emp_id, a) VALUES (?, ?)"
         
-        val fallbackInsert = "INSERT INTO reports (emp_id, a) VALUES (?, ?)"
+        conn.prepareStatement(deleteQuery).use { delStmt ->
+            delStmt.setString(1, x)
+            delStmt.executeUpdate()
+        }
         
-        try {
-            val insertStmt = conn.prepareStatement(insertQuery)
-            insertStmt.setString(1, x)
-            insertStmt.setString(2, y)
-            insertStmt.executeUpdate()
-            insertStmt.close()
-        } catch (_: Exception) {
-            val insertStmt = conn.prepareStatement(fallbackInsert)
-            insertStmt.setString(1, x)
-            insertStmt.setString(2, y)
-            insertStmt.executeUpdate()
-            insertStmt.close()
+        conn.prepareStatement(insertQuery).use { insStmt ->
+            insStmt.setString(1, x)
+            insStmt.setString(2, y)
+            insStmt.executeUpdate()
         }
     }
 
