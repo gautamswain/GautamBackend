@@ -17,38 +17,34 @@ object ReportMeService {
 
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
-        val query = "SELECT * FROM SalaryHistory ORDER BY rowid DESC"
+        val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
         
         conn.prepareStatement(query).use { pstmt ->
             val rs = pstmt.executeQuery()
-            val allRows = mutableListOf<Map<String, String>>()
+            val allRows = mutableListOf<Pair<String, String>>()
             
             while (rs.next()) {
-                val map = mutableMapOf<String, String>()
-                val meta = rs.metaData
-                for (i in 1..meta.columnCount) {
-                    map[meta.getColumnName(i).lowercase()] = rs.getString(i) ?: ""
-                }
-                allRows.add(map)
+                val month = rs.getString("month") ?: ""
+                val empId = rs.getString("emp_id_2") ?: ""
+                allRows.add(Pair(month, empId))
             }
             rs.close()
             
-            val distinctMonths = allRows.mapNotNull { it["month"] }.distinct().take(2)
+            // Sabuthu recent last duiti distinct month khoji bar kariba
+            val distinctMonths = allRows.map { it.first }.filter { it.isNotBlank() }.distinct().take(2)
             
+            // Sehi duiti month bhitara asuthiba emp_id_2 gudoiku collect kariba
             for (row in allRows) {
-                val month = row["month"] ?: ""
-                if (month in distinctMonths) {
-                    val code = row["salary_code"] ?: row["emp_id_2"] ?: row["id"] ?: ""
-                    if (code.isNotBlank()) {
-                        uniqueCodes.add(code.trim())
-                    }
+                val month = row.first
+                val empId = row.second
+                if (month in distinctMonths && empId.isNotBlank() && empId != "0") {
+                    uniqueCodes.add(empId.trim()) // Duplicate automatic remove hoijiba
                 }
             }
         }
         return uniqueCodes.toList()
     }
 
-    // x = "1" (1 no record), y = codes list JSON for "a" field
     fun generateAndSaveReport(conn: Connection, x: String, y: String) {
         val insertQuery = """
             INSERT INTO reports (emp_id, a) 

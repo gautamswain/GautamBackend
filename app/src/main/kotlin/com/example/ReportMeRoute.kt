@@ -23,10 +23,10 @@ fun Route.reportMeRouting(getConnection: () -> Connection?) {
                 "data" to reportResult
             ))
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf(
-                "status" to "error",
-                "message" to (e.localizedMessage ?: "Unknown error")
-            ))
-        }
+    call.respond(HttpStatusCode.InternalServerError, mapOf(
+        "status" to "error",
+        "message" to (e.message ?: e.toString()) // Exact error message dekhaibapain
+    ))
+}
     }
 }
