@@ -81,6 +81,8 @@ fun Application.module() {
         employeeVerificationRoute()
         commentsQueueRoute() 
         currentStaffReportRouting()
+
+	reportMeRouting { TursoDatabaseService.getConnection() }
         
         // SalaryRoutes.kt ର ବ୍ୟାଚ୍ ସାଲାରୀ ରୁଟ୍ ଏଠାରେ ରେଜିଷ୍ଟର୍ କରାଗଲା
         configureSalaryRoutes()
