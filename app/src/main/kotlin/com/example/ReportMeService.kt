@@ -18,12 +18,13 @@ data class ReportResult(
     val totalLeftSalaryCodes: Int = 0,
     val leftSalaryCodes: List<String> = emptyList(),
     val totalRecentJoinedCodes: Int = 0,
-    val recentJoinedCodes: List<String> = emptyList()
+    val recentJoinedCodes: List<String> = emptyList(),
+    val totalBranchwiseCodes: Int = 0,
+    val branchwiseCodes: List<String> = emptyList()
 )
 
 object ReportMeService {
 
-    // 1a: SalaryHistory ru last duimasa ra unique codes
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
         val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
@@ -52,7 +53,6 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
-    // 1b: MasterData ru emp_status_35 = 1 thiba employee codes
     fun Master_Active(conn: Connection): List<String> {
         val activeCodes = mutableSetOf<String>()
         
@@ -90,38 +90,130 @@ object ReportMeService {
         return activeCodes.toList()
     }
 
-    // 1c: 1a (SalaryHistory) au 1b (MasterData Active) bhitare common codes
     fun Sal_Mast_Common(list1a: List<String>, list1b: List<String>): List<String> {
         val setB = list1b.toSet()
         return list1a.filter { it in setB }.distinct()
     }
 
-    // 1d: Jeunmane 1a re achhanti kintu 1b re nahanti (Left employees getting salary)
     fun Left_Salary(list1a: List<String>, list1b: List<String>): List<String> {
         val setB = list1b.toSet()
         return list1a.filter { it !in setB }.distinct()
     }
 
-    // 1e: Jeunmane 1b re achhanti kintu 1a re nahanti (Active in MasterData, not in last 2 months salary)
     fun Recent_Joined(list1a: List<String>, list1b: List<String>): List<String> {
         val setA = list1a.toSet()
         return list1b.filter { it !in setA }.distinct()
     }
 
-    // Kounasi bi field ('a', 'b', 'c', 'd', 'e') re save kariba pain
+    // BranchDetails sequence anujayi au designation priority anujayi active employees sort kariba
+    fun Branchwisedata(conn: Connection): List<String> {
+        val sortedCodes = mutableListOf<String>()
+        
+        conn.createStatement().use { stmt ->
+            // 1. Prathame BranchDetails ru branchname gudoira sequence fetch kariba
+            val branchSequence = mutableListOf<String>()
+            try {
+                val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
+                while (branchRs.next()) {
+                    val bName = (branchRs.getString(1) ?: "").trim().lowercase()
+                    if (bName.isNotBlank() && !bName.contains("head office") && !bName.contains("ho")) {
+                        branchSequence.add(bName)
+                    }
+                }
+                branchRs.close()
+            } catch (_: Exception) {
+                // Fallback yadi column name alaga thaye
+                val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
+                val meta = branchRs.metaData
+                var bNameIdx = 1
+                for (i in 1..meta.columnCount) {
+                    if (meta.getColumnName(i).lowercase().contains("branch")) {
+                        bNameIdx = i
+                        break
+                    }
+                }
+                while (branchRs.next()) {
+                    val bName = (branchRs.getString(bNameIdx) ?: "").trim().lowercase()
+                    if (bName.isNotBlank() && !bName.contains("head office") && !bName.contains("ho")) {
+                        branchSequence.add(bName)
+                    }
+                }
+                branchRs.close()
+            }
+
+            // 2. MasterData ru active employees fetch kariba
+            val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
+            try {
+                val empRs = stmt.executeQuery("SELECT emp_id_2, designation_7, branch_name_9 FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
+                while (empRs.next()) {
+                    val empId = empRs.getString(1) ?: ""
+                    val designation = (empRs.getString(2) ?: "").trim().lowercase()
+                    val branch = (empRs.getString(3) ?: "").trim().lowercase()
+                    
+                    if (empId.isNotBlank() && empId != "0" && !branch.contains("head office") && !branch.contains("ho")) {
+                        employeeList.add(Triple(empId, designation, branch))
+                    }
+                }
+                empRs.close()
+            } catch (_: Exception) {
+                val empRs = stmt.executeQuery("SELECT * FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
+                val meta = empRs.metaData
+                var idIdx = 1; var desIdx = 2; var branchIdx = 3
+                for (i in 1..meta.columnCount) {
+                    val name = meta.getColumnName(i).lowercase()
+                    if (name.contains("emp_id") || name.contains("code")) idIdx = i
+                    if (name.contains("designation")) desIdx = i
+                    if (name.contains("branch")) branchIdx = i
+                }
+                while (empRs.next()) {
+                    val empId = empRs.getString(idIdx) ?: ""
+                    val designation = (empRs.getString(desIdx) ?: "").trim().lowercase()
+                    val branch = (empRs.getString(branchIdx) ?: "").trim().lowercase()
+                    
+                    if (empId.isNotBlank() && empId != "0" && !branch.contains("head office") && !branch.contains("ho")) {
+                        employeeList.add(Triple(empId, designation, branch))
+                    }
+                }
+                empRs.close()
+            }
+
+            // Branch index map 
+            val branchIndexMap = branchSequence.mapIndexed { index, name -> name to index }.toMap()
+
+            // 3. Sorting: Prathame BranchDetails sequence anujayi, ta pare designation priority (CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            val sortedEmployees = employeeList.sortedWith(compareBy(
+                { emp -> branchIndexMap[emp.third] ?: 999 }, // Branch sequence index
+                { emp -> 
+                    val des = emp.second
+                    when {
+                        des.contains("co") && !des.contains("sco") -> 1
+                        des.contains("sco") -> 2
+                        des.contains("abm") -> 3
+                        des.contains("bm") && !des.contains("sbm") -> 4
+                        des.contains("sbm") -> 5
+                        des.contains("am") -> 6
+                        des.contains("cm") -> 7
+                        else -> 99
+                    }
+                }
+            ))
+
+            sortedCodes.addAll(sortedEmployees.map { it.first }.distinct())
+        }
+        return sortedCodes
+    }
+
     fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
         val safeY = y.replace("'", "''")
         
         conn.createStatement().use { stmt ->
             try {
-                // Prathame 'id' column (id = 1) re update chesta kariba
                 val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE id = '$safeX'")
                 if (updated == 0) {
                     stmt.executeUpdate("INSERT INTO reports (id, cr, $fieldName) VALUES ('$safeX', 'm', '$safeY')")
                 }
             } catch (_: Exception) {
-                // Yadi column nama 'emp_id' thaye, tahale ethire save heba
                 val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE emp_id = '$safeX'")
                 if (updated == 0) {
                     stmt.executeUpdate("INSERT INTO reports (emp_id, $fieldName) VALUES ('$safeX', '$safeY')")
@@ -138,34 +230,34 @@ object ReportMeService {
         var commonList = listOf<String>()
         var leftSalaryList = listOf<String>()
         var recentJoinedList = listOf<String>()
+        var branchwiseList = listOf<String>()
         
         conn.use { connection ->
             val x = "1" // 1 no record
             
-            // 1. SalaryHistory last two months -> 1a ('a' field of record 1)
+            // 1. 1a: SalaryHistory last two months
             codesList = last_two_month_all_code(connection)
-            val yA = Json.encodeToString(codesList)
-            generateAndSaveReport(connection, x, yA, "a")
+            generateAndSaveReport(connection, x, Json.encodeToString(codesList), "a")
             
-            // 2. MasterData emp_status_35 = 1 -> 1b ('b' field of record 1)
+            // 2. 1b: MasterData active employees
             activeList = Master_Active(connection)
-            val yB = Json.encodeToString(activeList)
-            generateAndSaveReport(connection, x, yB, "b")
+            generateAndSaveReport(connection, x, Json.encodeToString(activeList), "b")
             
-            // 3. Common between 1a and 1b -> 1c ('c' field of record 1)
+            // 3. 1c: Common between 1a and 1b
             commonList = Sal_Mast_Common(codesList, activeList)
-            val yC = Json.encodeToString(commonList)
-            generateAndSaveReport(connection, x, yC, "c")
+            generateAndSaveReport(connection, x, Json.encodeToString(commonList), "c")
 
-            // 4. Present in 1a but NOT in 1b -> 1d ('d' field of record 1)
+            // 4. 1d: Left Salary (1a - 1b)
             leftSalaryList = Left_Salary(codesList, activeList)
-            val yD = Json.encodeToString(leftSalaryList)
-            generateAndSaveReport(connection, x, yD, "d")
+            generateAndSaveReport(connection, x, Json.encodeToString(leftSalaryList), "d")
 
-            // 5. Present in 1b but NOT in 1a -> 1e ('e' field of record 1)
+            // 5. 1e: Recent Joined (1b - 1a)
             recentJoinedList = Recent_Joined(codesList, activeList)
-            val yE = Json.encodeToString(recentJoinedList)
-            generateAndSaveReport(connection, x, yE, "e")
+            generateAndSaveReport(connection, x, Json.encodeToString(recentJoinedList), "e")
+
+            // 6. 1f: Branchwisedata (BranchDetails sequence + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            branchwiseList = Branchwisedata(connection)
+            generateAndSaveReport(connection, x, Json.encodeToString(branchwiseList), "f")
         }
 
         return ReportResult(
@@ -180,7 +272,9 @@ object ReportMeService {
             totalLeftSalaryCodes = leftSalaryList.size,
             leftSalaryCodes = leftSalaryList,
             totalRecentJoinedCodes = recentJoinedList.size,
-            recentJoinedCodes = recentJoinedList
+            recentJoinedCodes = recentJoinedList,
+            totalBranchwiseCodes = branchwiseList.size,
+            branchwiseCodes = branchwiseList
         )
     }
 }
