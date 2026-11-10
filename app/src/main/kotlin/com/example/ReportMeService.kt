@@ -19,19 +19,22 @@ object ReportMeService {
         val uniqueCodes = mutableSetOf<String>()
         val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
         
-        conn.prepareStatement(query).use { pstmt ->
-            val rs = pstmt.executeQuery()
+        conn.createStatement().use { stmt ->
+            val rs = stmt.executeQuery(query)
             val allRows = mutableListOf<Pair<String, String>>()
             
             while (rs.next()) {
-                val month = rs.getString("month") ?: ""
-                val empId = rs.getString("emp_id_2") ?: ""
+                // Column name badalare Column Index (1 au 2) use karajigala
+                val month = rs.getString(1) ?: ""
+                val empId = rs.getString(2) ?: ""
                 allRows.add(Pair(month, empId))
             }
             rs.close()
             
+            // Sabuthu recent last duiti distinct month khoji bar kariba
             val distinctMonths = allRows.map { it.first }.filter { it.isNotBlank() }.distinct().take(2)
             
+            // Sehi duiti month bhitara asuthiba emp_id_2 gudoiku collect kariba
             for (row in allRows) {
                 val month = row.first
                 val empId = row.second
@@ -43,13 +46,25 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
-    // REPLACE INTO SQLite/Turso re perfect kam kare au exception ase nahi
     fun generateAndSaveReport(conn: Connection, x: String, y: String) {
-        val query = "REPLACE INTO reports (emp_id, a) VALUES (?, ?)"
-        conn.prepareStatement(query).use { stmt ->
-            stmt.setString(1, x)
-            stmt.setString(2, y)
-            stmt.executeUpdate()
+        val safeX = x.replace("'", "''")
+        val safeY = y.replace("'", "''")
+        
+        // Table schema anujayi 'id' ba 'emp_id' re update/insert heba
+        conn.createStatement().use { stmt ->
+            try {
+                // Prathame 'id' column (screenshot anujayi id = 1) re update chesta kariba
+                val updated = stmt.executeUpdate("UPDATE reports SET a = '$safeY' WHERE id = '$safeX'")
+                if (updated == 0) {
+                    stmt.executeUpdate("INSERT INTO reports (id, cr, a) VALUES ('$safeX', 'm', '$safeY')")
+                }
+            } catch (_: Exception) {
+                // Yadi column nama 'emp_id' thaye, tahale ethire save heba
+                val updated = stmt.executeUpdate("UPDATE reports SET a = '$safeY' WHERE emp_id = '$safeX'")
+                if (updated == 0) {
+                    stmt.executeUpdate("INSERT INTO reports (emp_id, a) VALUES ('$safeX', '$safeY')")
+                }
+            }
         }
     }
 
