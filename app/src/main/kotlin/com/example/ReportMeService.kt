@@ -25,7 +25,7 @@ data class ReportResult(
 
 object ReportMeService {
 
-    // 1a: SalaryHistory ru last duimasa ra unique codes
+    // 1a: SalaryHistory ru last duimasa ra unique codes (emp_id_2)
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
         val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
@@ -54,13 +54,13 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
-    // 1b: MasterData ru emp_status_35 = 1 thiba employee codes
+    // 1b: MasterData ru emp_status_35 = 1 thiba employee codes (Code_2)
     fun Master_Active(conn: Connection): List<String> {
         val activeCodes = mutableSetOf<String>()
         
         conn.createStatement().use { stmt ->
             try {
-                val query = "SELECT emp_id_2 FROM MasterData WHERE emp_status_35 = '1' OR emp_status_35 = 1"
+                val query = "SELECT Code_2 FROM MasterData WHERE emp_status_35 = '1' OR emp_status_35 = 1"
                 val rs = stmt.executeQuery(query)
                 while (rs.next()) {
                     val code = rs.getString(1) ?: ""
@@ -75,7 +75,7 @@ object ReportMeService {
                 var codeColIndex = 1
                 for (i in 1..meta.columnCount) {
                     val colName = meta.getColumnName(i).lowercase()
-                    if (colName.contains("emp_id") || colName.contains("code")) {
+                    if (colName.contains("code_2") || colName.contains("code") || colName.contains("emp_id")) {
                         codeColIndex = i
                         break
                     }
@@ -110,7 +110,7 @@ object ReportMeService {
         return list1b.filter { it !in setA }.distinct()
     }
 
-    // 1f: Branchwisedata - BranchDetails sequence + MasterData branch_name_9 + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM
+    // 1f: Branchwisedata - BranchDetails sequence + MasterData (Code_2, branch_name_9, designation_7) + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM
     fun Branchwisedata(conn: Connection): List<String> {
         val sortedCodes = mutableListOf<String>()
         
@@ -127,30 +127,32 @@ object ReportMeService {
                 }
                 branchRs.close()
             } catch (_: Exception) {
-                val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
-                val meta = branchRs.metaData
-                var bNameIdx = 1
-                for (i in 1..meta.columnCount) {
-                    if (meta.getColumnName(i).lowercase().contains("branch")) {
-                        bNameIdx = i
-                        break
+                try {
+                    val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
+                    val meta = branchRs.metaData
+                    var bNameIdx = 1
+                    for (i in 1..meta.columnCount) {
+                        if (meta.getColumnName(i).lowercase().contains("branch")) {
+                            bNameIdx = i
+                            break
+                        }
                     }
-                }
-                while (branchRs.next()) {
-                    val bName = (branchRs.getString(bNameIdx) ?: "").trim().lowercase()
-                    if (bName.isNotBlank() && !bName.contains("head office") && !bName.contains("ho")) {
-                        branchSequence.add(bName)
+                    while (branchRs.next()) {
+                        val bName = (branchRs.getString(bNameIdx) ?: "").trim().lowercase()
+                        if (bName.isNotBlank() && !bName.contains("head office") && !bName.contains("ho")) {
+                            branchSequence.add(bName)
+                        }
                     }
-                }
-                branchRs.close()
+                    branchRs.close()
+                } catch (_: Exception) {}
             }
 
-            // 2. Fetch active employees along with branch_name_9 and designation_7 from MasterData
+            // 2. Fetch active employees from MasterData using Code_2, branch_name_9, designation_7
             val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
             try {
-                val empRs = stmt.executeQuery("SELECT emp_id_2, designation_7, branch_name_9 FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
+                val empRs = stmt.executeQuery("SELECT Code_2, designation_7, branch_name_9 FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
                 while (empRs.next()) {
-                    val empId = empRs.getString(1) ?: ""
+                    val empId = (empRs.getString(1) ?: "").trim()
                     val designation = (empRs.getString(2) ?: "").trim().lowercase()
                     val branch = (empRs.getString(3) ?: "").trim().lowercase()
                     
@@ -160,25 +162,29 @@ object ReportMeService {
                 }
                 empRs.close()
             } catch (_: Exception) {
-                val empRs = stmt.executeQuery("SELECT * FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
-                val meta = empRs.metaData
-                var idIdx = 1; var desIdx = 2; var branchIdx = 3
-                for (i in 1..meta.columnCount) {
-                    val name = meta.getColumnName(i).lowercase()
-                    if (name.contains("emp_id") || name.contains("code")) idIdx = i
-                    if (name.contains("designation")) desIdx = i
-                    if (name.contains("branch")) branchIdx = i
-                }
-                while (empRs.next()) {
-                    val empId = empRs.getString(idIdx) ?: ""
-                    val designation = (empRs.getString(desIdx) ?: "").trim().lowercase()
-                    val branch = (empRs.getString(branchIdx) ?: "").trim().lowercase()
+                try {
+                    val empRs = stmt.executeQuery("SELECT * FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
+                    val meta = empRs.metaData
+                    var idIdx = 1; var desIdx = 2; var branchIdx = 3
                     
-                    if (empId.isNotBlank() && empId != "0" && !branch.contains("head office") && !branch.contains("ho")) {
-                        employeeList.add(Triple(empId, designation, branch))
+                    for (i in 1..meta.columnCount) {
+                        val name = meta.getColumnName(i).lowercase()
+                        if (name.contains("code_2") || name.contains("code") || name.contains("emp_id")) idIdx = i
+                        if (name.contains("designation")) desIdx = i
+                        if (name.contains("branch")) branchIdx = i
                     }
-                }
-                empRs.close()
+
+                    while (empRs.next()) {
+                        val empId = (empRs.getString(idIdx) ?: "").trim()
+                        val designation = (empRs.getString(desIdx) ?: "").trim().lowercase()
+                        val branch = (empRs.getString(branchIdx) ?: "").trim().lowercase()
+                        
+                        if (empId.isNotBlank() && empId != "0" && !branch.contains("head office") && !branch.contains("ho")) {
+                            employeeList.add(Triple(empId, designation, branch))
+                        }
+                    }
+                    empRs.close()
+                } catch (_: Exception) {}
             }
 
             val branchIndexMap = branchSequence.mapIndexed { index, name -> name to index }.toMap()
@@ -258,7 +264,7 @@ object ReportMeService {
             recentJoinedList = Recent_Joined(codesList, activeList)
             generateAndSaveReport(connection, x, Json.encodeToString(recentJoinedList), "e")
 
-            // 6. 1f: Branchwisedata (BranchDetails branchname sequence + branch_name_9 + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            // 6. 1f: Branchwisedata
             branchwiseList = Branchwisedata(connection)
             generateAndSaveReport(connection, x, Json.encodeToString(branchwiseList), "f")
         }
