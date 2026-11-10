@@ -8,7 +8,7 @@ object ReportMeService {
 
     fun generateAndSaveReport(conn: Connection, empId: String): Map<String, Any> {
         var uniqueCode = ""
-        val monthsList = mutableListOf>()
+        val monthsList = mutableListOf<Map<String, String>>()
         val codesList = mutableListOf<String>()
 
         conn.use { connection ->
@@ -18,7 +18,7 @@ object ReportMeService {
             pstmt.setString(1, empId)
             val rs = pstmt.executeQuery()
 
-            val rows = mutableListOf>()
+            val rows = mutableListOf<Map<String, String>>()
             while (rs.next()) {
                 val map = mutableMapOf<String, String>()
                 val meta = rs.metaData

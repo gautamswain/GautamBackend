@@ -9,12 +9,17 @@ import java.sql.Connection
 fun Route.reportMeRouting(getConnection: () -> Connection?) {
     get("/api/turso/reportme") {
         try {
+            val empId = call.request.queryParameters["empId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "empId parameter is required"))
+                return@get
+            }
+
             val conn = getConnection() ?: run {
                 call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
                 return@get
             }
 
-            val resultJson = ReportMeService.generateAndSaveUniqueStaffReport(conn)
+            val resultJson = ReportMeService.generateAndSaveReport(conn, empId)
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "status" to "success",
