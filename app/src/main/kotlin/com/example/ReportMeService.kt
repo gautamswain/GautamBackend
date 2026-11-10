@@ -25,6 +25,7 @@ data class ReportResult(
 
 object ReportMeService {
 
+    // 1a: SalaryHistory ru last duimasa ra unique codes
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
         val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
@@ -53,6 +54,7 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
+    // 1b: MasterData ru emp_status_35 = 1 thiba employee codes
     fun Master_Active(conn: Connection): List<String> {
         val activeCodes = mutableSetOf<String>()
         
@@ -90,27 +92,30 @@ object ReportMeService {
         return activeCodes.toList()
     }
 
+    // 1c: Common between 1a and 1b
     fun Sal_Mast_Common(list1a: List<String>, list1b: List<String>): List<String> {
         val setB = list1b.toSet()
         return list1a.filter { it in setB }.distinct()
     }
 
+    // 1d: Present in 1a but NOT in 1b
     fun Left_Salary(list1a: List<String>, list1b: List<String>): List<String> {
         val setB = list1b.toSet()
         return list1a.filter { it !in setB }.distinct()
     }
 
+    // 1e: Present in 1b but NOT in 1a
     fun Recent_Joined(list1a: List<String>, list1b: List<String>): List<String> {
         val setA = list1a.toSet()
         return list1b.filter { it !in setA }.distinct()
     }
 
-    // BranchDetails sequence anujayi au designation priority anujayi active employees sort kariba
+    // 1f: Branchwisedata - BranchDetails sequence + MasterData branch_name_9 + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM
     fun Branchwisedata(conn: Connection): List<String> {
         val sortedCodes = mutableListOf<String>()
         
         conn.createStatement().use { stmt ->
-            // 1. Prathame BranchDetails ru branchname gudoira sequence fetch kariba
+            // 1. Fetch branchname sequence from BranchDetails
             val branchSequence = mutableListOf<String>()
             try {
                 val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
@@ -122,7 +127,6 @@ object ReportMeService {
                 }
                 branchRs.close()
             } catch (_: Exception) {
-                // Fallback yadi column name alaga thaye
                 val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
                 val meta = branchRs.metaData
                 var bNameIdx = 1
@@ -141,7 +145,7 @@ object ReportMeService {
                 branchRs.close()
             }
 
-            // 2. MasterData ru active employees fetch kariba
+            // 2. Fetch active employees along with branch_name_9 and designation_7 from MasterData
             val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
             try {
                 val empRs = stmt.executeQuery("SELECT emp_id_2, designation_7, branch_name_9 FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
@@ -177,12 +181,11 @@ object ReportMeService {
                 empRs.close()
             }
 
-            // Branch index map 
             val branchIndexMap = branchSequence.mapIndexed { index, name -> name to index }.toMap()
 
-            // 3. Sorting: Prathame BranchDetails sequence anujayi, ta pare designation priority (CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            // 3. Sorting: BranchDetails sequence index first, then designation priority (CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
             val sortedEmployees = employeeList.sortedWith(compareBy(
-                { emp -> branchIndexMap[emp.third] ?: 999 }, // Branch sequence index
+                { emp -> branchIndexMap[emp.third] ?: 999 },
                 { emp -> 
                     val des = emp.second
                     when {
@@ -255,7 +258,7 @@ object ReportMeService {
             recentJoinedList = Recent_Joined(codesList, activeList)
             generateAndSaveReport(connection, x, Json.encodeToString(recentJoinedList), "e")
 
-            // 6. 1f: Branchwisedata (BranchDetails sequence + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            // 6. 1f: Branchwisedata (BranchDetails branchname sequence + branch_name_9 + CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
             branchwiseList = Branchwisedata(connection)
             generateAndSaveReport(connection, x, Json.encodeToString(branchwiseList), "f")
         }
