@@ -30,35 +30,26 @@ object ReportMeService {
             }
             rs.close()
             
-            // Sabuthu recent last duiti distinct month khoji bar kariba
             val distinctMonths = allRows.map { it.first }.filter { it.isNotBlank() }.distinct().take(2)
             
-            // Sehi duiti month bhitara asuthiba emp_id_2 gudoiku collect kariba
             for (row in allRows) {
                 val month = row.first
                 val empId = row.second
                 if (month in distinctMonths && empId.isNotBlank() && empId != "0") {
-                    uniqueCodes.add(empId.trim()) // Duplicate automatic remove hoijiba
+                    uniqueCodes.add(empId.trim())
                 }
             }
         }
         return uniqueCodes.toList()
     }
 
-    // ON CONFLICT badhaigala, prathame delete kari ki insert karajigala jaha sabu database re support kare
+    // REPLACE INTO SQLite/Turso re perfect kam kare au exception ase nahi
     fun generateAndSaveReport(conn: Connection, x: String, y: String) {
-        val deleteQuery = "DELETE FROM reports WHERE emp_id = ?"
-        val insertQuery = "INSERT INTO reports (emp_id, a) VALUES (?, ?)"
-        
-        conn.prepareStatement(deleteQuery).use { delStmt ->
-            delStmt.setString(1, x)
-            delStmt.executeUpdate()
-        }
-        
-        conn.prepareStatement(insertQuery).use { insStmt ->
-            insStmt.setString(1, x)
-            insStmt.setString(2, y)
-            insStmt.executeUpdate()
+        val query = "REPLACE INTO reports (emp_id, a) VALUES (?, ?)"
+        conn.prepareStatement(query).use { stmt ->
+            stmt.setString(1, x)
+            stmt.setString(2, y)
+            stmt.executeUpdate()
         }
     }
 
