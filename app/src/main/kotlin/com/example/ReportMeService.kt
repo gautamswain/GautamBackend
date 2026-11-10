@@ -12,11 +12,18 @@ data class ReportResult(
     val totalUniqueCodes: Int,
     val codes: List<String>,
     val totalMasterActive: Int = 0,
-    val masterActiveCodes: List<String> = emptyList()
+    val masterActiveCodes: List<String> = emptyList(),
+    val totalCommonCodes: Int = 0,
+    val commonCodes: List<String> = emptyList(),
+    val totalLeftSalaryCodes: Int = 0,
+    val leftSalaryCodes: List<String> = emptyList(),
+    val totalRecentJoinedCodes: Int = 0,
+    val recentJoinedCodes: List<String> = emptyList()
 )
 
 object ReportMeService {
 
+    // 1a: SalaryHistory ru last duimasa ra unique codes
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
         val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
@@ -26,17 +33,14 @@ object ReportMeService {
             val allRows = mutableListOf<Pair<String, String>>()
             
             while (rs.next()) {
-                // Column name badalare Column Index (1 au 2) use karajigala
                 val month = rs.getString(1) ?: ""
                 val empId = rs.getString(2) ?: ""
                 allRows.add(Pair(month, empId))
             }
             rs.close()
             
-            // Sabuthu recent last duiti distinct month khoji bar kariba
             val distinctMonths = allRows.map { it.first }.filter { it.isNotBlank() }.distinct().take(2)
             
-            // Sehi duiti month bhitara asuthiba emp_id_2 gudoiku collect kariba
             for (row in allRows) {
                 val month = row.first
                 val empId = row.second
@@ -48,12 +52,11 @@ object ReportMeService {
         return uniqueCodes.toList()
     }
 
-    // MasterData ru emp_status_35 = 1 thiba employee code aniba function
+    // 1b: MasterData ru emp_status_35 = 1 thiba employee codes
     fun Master_Active(conn: Connection): List<String> {
         val activeCodes = mutableSetOf<String>()
         
         conn.createStatement().use { stmt ->
-            // Prathame emp_id_2 column check kariba, na thile fallback re dynamic column khojiba
             try {
                 val query = "SELECT emp_id_2 FROM MasterData WHERE emp_status_35 = '1' OR emp_status_35 = 1"
                 val rs = stmt.executeQuery(query)
@@ -87,7 +90,25 @@ object ReportMeService {
         return activeCodes.toList()
     }
 
-    // Kounasi bi निर्दिष्ट field ('a' ba 'b') re save kariba pain
+    // 1c: 1a (SalaryHistory) au 1b (MasterData Active) bhitare common codes
+    fun Sal_Mast_Common(list1a: List<String>, list1b: List<String>): List<String> {
+        val setB = list1b.toSet()
+        return list1a.filter { it in setB }.distinct()
+    }
+
+    // 1d: Jeunmane 1a re achhanti kintu 1b re nahanti (Left employees getting salary)
+    fun Left_Salary(list1a: List<String>, list1b: List<String>): List<String> {
+        val setB = list1b.toSet()
+        return list1a.filter { it !in setB }.distinct()
+    }
+
+    // 1e: Jeunmane 1b re achhanti kintu 1a re nahanti (Active in MasterData, not in last 2 months salary)
+    fun Recent_Joined(list1a: List<String>, list1b: List<String>): List<String> {
+        val setA = list1a.toSet()
+        return list1b.filter { it !in setA }.distinct()
+    }
+
+    // Kounasi bi field ('a', 'b', 'c', 'd', 'e') re save kariba pain
     fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
         val safeY = y.replace("'", "''")
@@ -114,6 +135,9 @@ object ReportMeService {
     fun processAndSave(conn: Connection): ReportResult {
         var codesList = listOf<String>()
         var activeList = listOf<String>()
+        var commonList = listOf<String>()
+        var leftSalaryList = listOf<String>()
+        var recentJoinedList = listOf<String>()
         
         conn.use { connection ->
             val x = "1" // 1 no record
@@ -127,6 +151,21 @@ object ReportMeService {
             activeList = Master_Active(connection)
             val yB = Json.encodeToString(activeList)
             generateAndSaveReport(connection, x, yB, "b")
+            
+            // 3. Common between 1a and 1b -> 1c ('c' field of record 1)
+            commonList = Sal_Mast_Common(codesList, activeList)
+            val yC = Json.encodeToString(commonList)
+            generateAndSaveReport(connection, x, yC, "c")
+
+            // 4. Present in 1a but NOT in 1b -> 1d ('d' field of record 1)
+            leftSalaryList = Left_Salary(codesList, activeList)
+            val yD = Json.encodeToString(leftSalaryList)
+            generateAndSaveReport(connection, x, yD, "d")
+
+            // 5. Present in 1b but NOT in 1a -> 1e ('e' field of record 1)
+            recentJoinedList = Recent_Joined(codesList, activeList)
+            val yE = Json.encodeToString(recentJoinedList)
+            generateAndSaveReport(connection, x, yE, "e")
         }
 
         return ReportResult(
@@ -135,7 +174,13 @@ object ReportMeService {
             totalUniqueCodes = codesList.size,
             codes = codesList,
             totalMasterActive = activeList.size,
-            masterActiveCodes = activeList
+            masterActiveCodes = activeList,
+            totalCommonCodes = commonList.size,
+            commonCodes = commonList,
+            totalLeftSalaryCodes = leftSalaryList.size,
+            leftSalaryCodes = leftSalaryList,
+            totalRecentJoinedCodes = recentJoinedList.size,
+            recentJoinedCodes = recentJoinedList
         )
     }
 }
