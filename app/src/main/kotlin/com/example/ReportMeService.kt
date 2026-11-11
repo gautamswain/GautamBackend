@@ -98,80 +98,33 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-    // 1f: Branchwisedata (Using 1b activeCodes)
-    fun Branchwisedata(conn: Connection, activeCodes: List<String>): List<String> {
-        val sortedCodes = mutableListOf<String>()
-        
-        conn.createStatement().use { stmt ->
-            // 1. Fetch exact branch sequence from BranchDetails safely
-            val branchSequence = mutableListOf<String>()
-            try {
-                val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
-                val meta = branchRs.metaData
-                var branchColName = ""
-                for (i in 1..meta.columnCount) {
-                    val cName = meta.getColumnName(i).lowercase()
-                    if (cName.contains("branchname") || cName == "branch_name" || cName == "branch") {
-                        branchColName = meta.getColumnName(i)
-                        break
-                    }
+    // 1f: Branchwisedata (Without Sorting - Direct "code, branch, designation" String List)
+fun Branchwisedata(conn: Connection, activeCodes: List<String>): List<String> {
+    val resultList = mutableListOf<String>()
+    val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
+
+    conn.createStatement().use { stmt ->
+        val seenIds = mutableSetOf<String>()
+        try {
+            val empRs = stmt.executeQuery("SELECT * FROM MasterData")
+            while (empRs.next()) {
+                val dto = StaffRepository.parseMasterDataDto(empRs)
+                val empId = dto.empId.trim()
+                val empIdUpper = empId.uppercase()
+                val designation = dto.designation.trim()
+                val branch = dto.branchName.trim()
+
+                if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
+                    resultList.add("$empId, $branch, $designation")
                 }
-                while (branchRs.next()) {
-                    val bName = if (branchColName.isNotEmpty()) (branchRs.getString(branchColName) ?: "").trim() else ""
-                    if (bName.isNotBlank() && !bName.contains("Head Office", true) && !bName.contains("HO", true)) {
-                        branchSequence.add(bName)
-                    }
-                }
-                branchRs.close()
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
-
-            // 2. Fetch MasterData using StaffRepository
-            val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
-            try {
-                val empRs = stmt.executeQuery("SELECT * FROM MasterData")
-                while (empRs.next()) {
-                    val dto = StaffRepository.parseMasterDataDto(empRs)
-                    val empId = dto.empId.trim()
-                    val designation = dto.designation.trim().lowercase()
-                    val branch = dto.branchName.trim()
-
-                    // ✅ ଏଠାରେ ସିଧାସଳଖ 1b ର activeCodes କୁ ଚେକ୍ କରାଯାଉଛି
-                    if (activeCodes.contains(empId) && empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
-                        employeeList.add(Triple(empId, designation, branch))
-                    }
-                }
-                empRs.close()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // Create map for branch sequence index lookup
-            val branchIndexMap = branchSequence.mapIndexed { index, name -> name.lowercase() to index }.toMap()
-
-            // 3. Sorting by BranchDetails sequence + Designation priority
-            val sortedEmployees = employeeList.sortedWith(compareBy(
-                { emp -> branchIndexMap[emp.third.lowercase()] ?: 999 },
-                { emp -> 
-                    val des = emp.second
-                    when {
-                        des.contains("co") && !des.contains("sco") -> 1
-                        des.contains("sco") -> 2
-                        des.contains("abm") -> 3
-                        des.contains("bm") && !des.contains("sbm") -> 4
-                        des.contains("sbm") -> 5
-                        des.contains("am") -> 6
-                        des.contains("cm") -> 7
-                        else -> 99
-                    }
-                }
-            ))
-
-            sortedCodes.addAll(sortedEmployees.map { it.first }.distinct())
+            empRs.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        return sortedCodes
     }
+    return resultList
+}
 //-----------------------------------------------------------------------------------------------
     fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
