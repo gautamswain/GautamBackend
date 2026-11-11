@@ -96,53 +96,62 @@ object ReportMeService {
         val setA = list1a.toSet()
         return list1b.filter { it !in setA }.distinct()
     }
+//-------------------------------------------------------------------------------
 
     // 1f: Branchwisedata
     fun Branchwisedata(conn: Connection): List<String> {
         val sortedCodes = mutableListOf<String>()
         
         conn.createStatement().use { stmt ->
-            // 1. Fetch exact branch sequence from BranchDetails
+            // 1. Fetch exact branch sequence from BranchDetails safely
             val branchSequence = mutableListOf<String>()
             try {
-                val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
+                val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
+                val meta = branchRs.metaData
+                var branchColName = ""
+                
+                // ଡାଟାବେସ୍ ରେ ବ୍ରାଞ୍ଚ ନାମ ଥିବା ପ୍ରକୃତ କଲମ୍ ଖୋଜିବା
+                for (i in 1..meta.columnCount) {
+                    val cName = meta.getColumnName(i).lowercase()
+                    if (cName.contains("branchname") || cName == "branch_name" || cName == "branch") {
+                        branchColName = meta.getColumnName(i)
+                        break
+                    }
+                }
+                
                 while (branchRs.next()) {
-                    val bName = (branchRs.getString(1) ?: "").trim()
+                    val bName = if (branchColName.isNotEmpty()) (branchRs.getString(branchColName) ?: "").trim() else ""
                     if (bName.isNotBlank() && !bName.contains("Head Office", true) && !bName.contains("HO", true)) {
                         branchSequence.add(bName)
                     }
                 }
                 branchRs.close()
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
-            // 2. Fetch Code_2, designation_7, branch_name_9 from MasterData where active
+            // 2. Fetch MasterData using StaffRepository to AVOID column name mismatch crashes
             val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
             try {
-                val empRs = stmt.executeQuery("SELECT Code_2, designation_7, branch_name_9 FROM MasterData WHERE (emp_status_35 = '1' OR emp_status_35 = 1)")
+                val empRs = stmt.executeQuery("SELECT * FROM MasterData")
                 while (empRs.next()) {
-                    val empId = (empRs.getString(1) ?: "").trim()
-                    val designation = (empRs.getString(2) ?: "").trim().lowercase()
-                    val branch = (empRs.getString(3) ?: "").trim()
-                    
-                    if (empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
+                    // ଏଠାରେ ଆମେ ତିଆରି କରିଥିବା StaffRepository ବ୍ୟବହାର ହେଉଛି
+                    val dto = StaffRepository.parseMasterDataDto(empRs)
+                    val empId = dto.empId.trim()
+                    val designation = dto.designation.trim().lowercase()
+                    val branch = dto.branchName.trim()
+                    val statusScore = StaffRepository.calculateStatusScore(dto)
+
+                    // ଆକ୍ଟିଭ୍ ଷ୍ଟାଫ୍ ଯାଞ୍ଚ
+                    val isActive = statusScore > 1 || dto.empStatus == "1" || dto.empStatus.equals("active", true)
+
+                    if (isActive && empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
                         employeeList.add(Triple(empId, designation, branch))
                     }
                 }
                 empRs.close()
-            } catch (_: Exception) {
-                try {
-                    val empRs = stmt.executeQuery("SELECT Code_2, designation_7, branch_name_9 FROM MasterData")
-                    while (empRs.next()) {
-                        val empId = (empRs.getString(1) ?: "").trim()
-                        val designation = (empRs.getString(2) ?: "").trim().lowercase()
-                        val branch = (empRs.getString(3) ?: "").trim()
-                        
-                        if (empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
-                            employeeList.add(Triple(empId, designation, branch))
-                        }
-                    }
-                    empRs.close()
-                } catch (_: Exception) {}
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
 
             // Create map for branch sequence index lookup (ignoring case)
@@ -170,7 +179,7 @@ object ReportMeService {
         }
         return sortedCodes
     }
-
+//-----------------------------------------------------------------------------------------------
     fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
         val safeY = y.replace("'", "''")
