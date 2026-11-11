@@ -20,7 +20,9 @@ data class ReportResult(
     val totalRecentJoinedCodes: Int = 0,
     val recentJoinedCodes: List<String> = emptyList(),
     val totalBranchwiseCodes: Int = 0,
-    val branchwiseCodes: List<String> = emptyList()
+    val branchwiseCodes: List<String> = emptyList(),
+    val totalHeadOfficeCodes: Int = 0,
+    val headOfficeCodes: List<String> = emptyList()
 )
 
 object ReportMeService {
@@ -163,6 +165,7 @@ object ReportMeService {
         var leftSalaryList = listOf<String>()
         var recentJoinedList = listOf<String>()
         var branchwiseList = listOf<String>()
+        var headOfficeList = listOf<String>()
 
         val x = "1" // 1 no record
 
@@ -182,9 +185,11 @@ object ReportMeService {
         generateAndSaveReport(conn, x, Json.encodeToString(recentJoinedList), "e")
 
         // 1f & 1g: Branchwise (f) ଏବଂ Head Office (g) ଅଲଗା କରିବା
-    val (branchwiseList, headOfficeList) = Branchwisedata(conn, activeList)
-    generateAndSaveReport(conn, x, Json.encodeToString(branchwiseList), "f")
-    generateAndSaveReport(conn, x, Json.encodeToString(headOfficeList), "g")
+        val (bList, hList) = Branchwisedata(conn, activeList)
+        branchwiseList = bList
+        headOfficeList = hList
+        generateAndSaveReport(conn, x, Json.encodeToString(branchwiseList), "f")
+        generateAndSaveReport(conn, x, Json.encodeToString(headOfficeList), "g")
 
         return ReportResult(
             status = "success",
@@ -200,7 +205,9 @@ object ReportMeService {
             totalRecentJoinedCodes = recentJoinedList.size,
             recentJoinedCodes = recentJoinedList,
             totalBranchwiseCodes = branchwiseList.size,
-            branchwiseCodes = branchwiseList
+            branchwiseCodes = branchwiseList,
+            totalHeadOfficeCodes = headOfficeList.size,
+            headOfficeCodes = headOfficeList
         )
     }
 }
