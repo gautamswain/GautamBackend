@@ -98,33 +98,42 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-    // 1f: Branchwisedata (Without Sorting - Direct "code, branch, designation" String List)
-fun Branchwisedata(conn: Connection, activeCodes: List<String>): List<String> {
-    val resultList = mutableListOf<String>()
-    val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
+   // 1f & 1g: Branchwisedata (1f = Other Branches, 1g = Head Office)
+    fun Branchwisedata(conn: Connection, activeCodes: List<String>): Pair<List<String>, List<String>> {
+        val branchList = mutableListOf<String>()
+        val headOfficeList = mutableListOf<String>()
+        val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
 
-    conn.createStatement().use { stmt ->
-        val seenIds = mutableSetOf<String>()
-        try {
-            val empRs = stmt.executeQuery("SELECT * FROM MasterData")
-            while (empRs.next()) {
-                val dto = StaffRepository.parseMasterDataDto(empRs)
-                val empId = dto.empId.trim()
-                val empIdUpper = empId.uppercase()
-                val designation = dto.designation.trim()
-                val branch = dto.branchName.trim()
+        conn.createStatement().use { stmt ->
+            val seenIds = mutableSetOf<String>()
+            try {
+                val empRs = stmt.executeQuery("SELECT * FROM MasterData")
+                while (empRs.next()) {
+                    val dto = StaffRepository.parseMasterDataDto(empRs)
+                    val empId = dto.empId.trim()
+                    val empIdUpper = empId.uppercase()
+                    val designation = dto.designation.trim()
+                    val branch = dto.branchName.trim()
 
-                if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
-                    resultList.add("$empId, $branch, $designation")
+                    if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
+                        val formattedRecord = "$empId, $branch, $designation"
+                        
+                        // Head Office ଚେକ୍ କରି ଅଲଗା ଅଲଗା ଲିଷ୍ଟରେ ପକାଇବା
+                        if (branch.equals("Head Office", ignoreCase = true) || branch.equals("HO", ignoreCase = true)) {
+                            headOfficeList.add(formattedRecord) // 1g ପାଇଁ
+                        } else {
+                            branchList.add(formattedRecord)     // 1f ପାଇଁ
+                        }
+                    }
                 }
+                empRs.close()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            empRs.close()
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
+        return Pair(branchList, headOfficeList)
     }
-    return resultList
-}
+
 //-----------------------------------------------------------------------------------------------
     fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
@@ -172,8 +181,10 @@ fun Branchwisedata(conn: Connection, activeCodes: List<String>): List<String> {
         recentJoinedList = Recent_Joined(codesList, activeList)
         generateAndSaveReport(conn, x, Json.encodeToString(recentJoinedList), "e")
 
-        branchwiseList = Branchwisedata(conn, activeList)
-        generateAndSaveReport(conn, x, Json.encodeToString(branchwiseList), "f")
+        // 1f & 1g: Branchwise (f) ଏବଂ Head Office (g) ଅଲଗା କରିବା
+    val (branchwiseList, headOfficeList) = Branchwisedata(conn, activeList)
+    generateAndSaveReport(conn, x, Json.encodeToString(branchwiseList), "f")
+    generateAndSaveReport(conn, x, Json.encodeToString(headOfficeList), "g")
 
         return ReportResult(
             status = "success",
