@@ -98,8 +98,8 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-    // 1f: Branchwisedata
-    fun Branchwisedata(conn: Connection): List<String> {
+    // 1f: Branchwisedata (Using 1b activeCodes)
+    fun Branchwisedata(conn: Connection, activeCodes: List<String>): List<String> {
         val sortedCodes = mutableListOf<String>()
         
         conn.createStatement().use { stmt ->
@@ -109,8 +109,6 @@ object ReportMeService {
                 val branchRs = stmt.executeQuery("SELECT * FROM BranchDetails")
                 val meta = branchRs.metaData
                 var branchColName = ""
-                
-                // ଡାଟାବେସ୍ ରେ ବ୍ରାଞ୍ଚ ନାମ ଥିବା ପ୍ରକୃତ କଲମ୍ ଖୋଜିବା
                 for (i in 1..meta.columnCount) {
                     val cName = meta.getColumnName(i).lowercase()
                     if (cName.contains("branchname") || cName == "branch_name" || cName == "branch") {
@@ -118,7 +116,6 @@ object ReportMeService {
                         break
                     }
                 }
-                
                 while (branchRs.next()) {
                     val bName = if (branchColName.isNotEmpty()) (branchRs.getString(branchColName) ?: "").trim() else ""
                     if (bName.isNotBlank() && !bName.contains("Head Office", true) && !bName.contains("HO", true)) {
@@ -130,22 +127,18 @@ object ReportMeService {
                 e.printStackTrace()
             }
 
-            // 2. Fetch MasterData using StaffRepository to AVOID column name mismatch crashes
+            // 2. Fetch MasterData using StaffRepository
             val employeeList = mutableListOf<Triple<String, String, String>>() // empId, designation, branch
             try {
                 val empRs = stmt.executeQuery("SELECT * FROM MasterData")
                 while (empRs.next()) {
-                    // ଏଠାରେ ଆମେ ତିଆରି କରିଥିବା StaffRepository ବ୍ୟବହାର ହେଉଛି
                     val dto = StaffRepository.parseMasterDataDto(empRs)
                     val empId = dto.empId.trim()
                     val designation = dto.designation.trim().lowercase()
                     val branch = dto.branchName.trim()
-                    val statusScore = StaffRepository.calculateStatusScore(dto)
 
-                    // ଆକ୍ଟିଭ୍ ଷ୍ଟାଫ୍ ଯାଞ୍ଚ
-                    val isActive = statusScore > 1 || dto.empStatus == "1" || dto.empStatus.equals("active", true)
-
-                    if (isActive && empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
+                    // ✅ ଏଠାରେ ସିଧାସଳଖ 1b ର activeCodes କୁ ଚେକ୍ କରାଯାଉଛି
+                    if (activeCodes.contains(empId) && empId.isNotBlank() && empId != "0" && !branch.contains("Head Office", true) && !branch.contains("HO", true)) {
                         employeeList.add(Triple(empId, designation, branch))
                     }
                 }
@@ -154,10 +147,10 @@ object ReportMeService {
                 e.printStackTrace()
             }
 
-            // Create map for branch sequence index lookup (ignoring case)
+            // Create map for branch sequence index lookup
             val branchIndexMap = branchSequence.mapIndexed { index, name -> name.lowercase() to index }.toMap()
 
-            // 3. Sorting by BranchDetails sequence + Designation priority (CO -> SCO -> ABM -> BM -> SBM -> AM -> CM)
+            // 3. Sorting by BranchDetails sequence + Designation priority
             val sortedEmployees = employeeList.sortedWith(compareBy(
                 { emp -> branchIndexMap[emp.third.lowercase()] ?: 999 },
                 { emp -> 
@@ -226,7 +219,7 @@ object ReportMeService {
         recentJoinedList = Recent_Joined(codesList, activeList)
         generateAndSaveReport(conn, x, Json.encodeToString(recentJoinedList), "e")
 
-        branchwiseList = Branchwisedata(conn)
+        branchwiseList = Branchwisedata(conn, activeList)
         generateAndSaveReport(conn, x, Json.encodeToString(branchwiseList), "f")
 
         return ReportResult(
