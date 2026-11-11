@@ -199,32 +199,30 @@ object ReportMeService {
         var leftSalaryList = listOf<String>()
         var recentJoinedList = listOf<String>()
         var branchwiseList = listOf<String>()
-        
-        conn.use { connection ->
-            val x = "1" // 1 no record
-            
-            codesList = last_two_month_all_code(connection)
-            generateAndSaveReport(connection, x, Json.encodeToString(codesList), "a")
-            
-            activeList = Master_Active(connection)
-            generateAndSaveReport(connection, x, Json.encodeToString(activeList), "b")
-            
-            commonList = Sal_Mast_Common(codesList, activeList)
-            generateAndSaveReport(connection, x, Json.encodeToString(commonList), "c")
 
-            leftSalaryList = Left_Salary(codesList, activeList)
-            generateAndSaveReport(connection, x, Json.encodeToString(leftSalaryList), "d")
+        val x = "1" // 1 no record
 
-            recentJoinedList = Recent_Joined(codesList, activeList)
-            generateAndSaveReport(connection, x, Json.encodeToString(recentJoinedList), "e")
+        codesList = last_two_month_all_code(conn)
+        generateAndSaveReport(conn, x, Json.encodeToString(codesList), "a")
 
-            branchwiseList = Branchwisedata(connection)
-            generateAndSaveReport(connection, x, Json.encodeToString(branchwiseList), "f")
-        }
+        activeList = Master_Active(conn)
+        generateAndSaveReport(conn, x, Json.encodeToString(activeList), "b")
+
+        commonList = Sal_Mast_Common(codesList, activeList)
+        generateAndSaveReport(conn, x, Json.encodeToString(commonList), "c")
+
+        leftSalaryList = Left_Salary(codesList, activeList)
+        generateAndSaveReport(conn, x, Json.encodeToString(leftSalaryList), "d")
+
+        recentJoinedList = Recent_Joined(codesList, activeList)
+        generateAndSaveReport(conn, x, Json.encodeToString(recentJoinedList), "e")
+
+        branchwiseList = Branchwisedata(conn)
+        generateAndSaveReport(conn, x, Json.encodeToString(branchwiseList), "f")
 
         return ReportResult(
             status = "success",
-            idRecord = "1",
+            idRecord = x,
             totalUniqueCodes = codesList.size,
             codes = codesList,
             totalMasterActive = activeList.size,
