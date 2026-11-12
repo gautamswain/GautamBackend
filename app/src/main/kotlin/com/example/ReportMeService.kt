@@ -100,13 +100,18 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-  // 1f & 1g: Branchwisedata (1f = Other Branches, 1g = Head Office - ବିନା ସର୍ଟିଂରେ)
+  // 1f & 1g: Branchwisedata (BranchDetails ru gotie gotie kari padhi branchwise list ku update kariba)
     fun Branchwisedata(conn: Connection, activeCodes: List<String>): Pair<List<String>, List<String>> {
-        val branchList = mutableListOf<String>()
+        val branchwiseList = mutableListOf<String>() // Prathame (code, branchname, designation) rahiba
         val headOfficeList = mutableListOf<String>()
         val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
 
+        fun normalizeName(name: String): String {
+            return name.trim().lowercase().replace(Regex("\\s+"), " ")
+        }
+
         conn.createStatement().use { stmt ->
+            // 1. MasterData ru active staff fetch kari branchwiseList o headOfficeList banai neba
             val seenIds = mutableSetOf<String>()
             try {
                 val empRs = stmt.executeQuery("SELECT * FROM MasterData")
@@ -118,13 +123,10 @@ object ReportMeService {
                     val branch = dto.branchName.trim()
 
                     if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
-                        val formattedRecord = "$empId, $branch, $designation"
-                        
-                        // Head Office ଚେକ୍ କରି ଅଲଗା ଅଲଗା ଲିଷ୍ଟରେ ପକାଇବା
                         if (branch.contains("head office", ignoreCase = true) || branch.equals("ho", ignoreCase = true)) {
-                            headOfficeList.add(formattedRecord) // 1g ପାଇଁ
+                            headOfficeList.add("$empId, $branch, $designation") // 1g
                         } else {
-                            branchList.add(formattedRecord)     // 1f ପାଇଁ
+                            branchwiseList.add("$empId, $branch, $designation") // 1f (initial format)
                         }
                     }
                 }
@@ -132,8 +134,40 @@ object ReportMeService {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+
+            // 2. Ebe BranchDetails ru sabu record gotie gotie kari padhiba (slno, branchname)
+            try {
+                val branchRs = stmt.executeQuery("SELECT slno, branchname FROM BranchDetails")
+                while (branchRs.next()) {
+                    val recordNo = (branchRs.getString("slno") ?: "").trim()
+                    val dbBranchName = (branchRs.getString("branchname") ?: "").trim()
+
+                    if (dbBranchName.isNotBlank()) {
+                        val cleanDbBranch = normalizeName(dbBranchName)
+
+                        // branchwiseList re jeunthi branchname match kariba, taku change kari branchno jodi deba
+                        for (i in branchwiseList.indices) {
+                            val parts = branchwiseList[i].split(",").map { it.trim() }
+                            // parts[0] = code, parts[1] = branchname, parts[2] = designation
+                            if (parts.size == 3 && normalizeName(parts[1]) == cleanDbBranch) {
+                                branchwiseList[i] = "${parts[0]}, ${parts[1]}, ${parts[2]}, $recordNo"
+                            }
+                        }
+                    }
+                }
+                branchRs.close()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
-        return Pair(branchList, headOfficeList)
+
+        // 3. Branchno (1, 2, 3...) krama anuyayi sajai deba (jadi sorting darkar na thae tebe ehi 4 line kati paribe)
+        val sortedBranchwiseList = branchwiseList.sortedBy { record ->
+            val parts = record.split(",").map { it.trim() }
+            if (parts.size >= 4) parts[3].toIntOrNull() ?: 9999 else 9999
+        }
+
+        return Pair(sortedBranchwiseList, headOfficeList)
     }
 
 //-----------------------------------------------------------------------------------------------
