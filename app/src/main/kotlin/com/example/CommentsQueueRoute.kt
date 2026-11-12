@@ -17,13 +17,13 @@ fun Route.commentsQueueRoute() {
                 null
             }
 
-            val separater = jsonElement?.get("separater")?.jsonPrimitive?.content
-                ?: jsonElement?.get("separator")?.jsonPrimitive?.content
+            val separater = jsonElement?.get("separater")?.jsonPrimitive?.contentOrNull
+                ?: jsonElement?.get("separator")?.jsonPrimitive?.contentOrNull
                 ?: "NewJ"
-            val jsonDetails = jsonElement?.get("jsondetails")?.jsonPrimitive?.content
-                ?: jsonElement?.get("jsonDetails")?.jsonPrimitive?.content
+            val jsonDetails = jsonElement?.get("jsondetails")?.jsonPrimitive?.contentOrNull
+                ?: jsonElement?.get("jsonDetails")?.jsonPrimitive?.contentOrNull
                 ?: bodyText
-            val wef = jsonElement?.get("wef")?.jsonPrimitive?.content
+            val wef = jsonElement?.get("wef")?.jsonPrimitive?.contentOrNull
                 ?: java.time.LocalDate.now().toString()
 
             val conn = TursoDatabaseService.getConnection()
@@ -33,25 +33,28 @@ fun Route.commentsQueueRoute() {
             }
 
             try {
-                val passedSlNo = jsonElement?.get("slno")?.jsonPrimitive?.content
+                val passedSlNo = jsonElement?.get("slno")?.jsonPrimitive?.contentOrNull
                 val finalSlNo = if (!passedSlNo.isNullOrBlank()) {
                     passedSlNo
                 } else {
-                    conn.createStatement().use { stmt ->
-                        val rs = stmt.executeQuery("SELECT COALESCE(MAX(CAST(slno AS INTEGER)), 0) + 1 AS next_sl FROM Comments")
-                        if (rs.next()) rs.getInt("next_sl").toString() else "1"
+                    try {
+                        conn.createStatement().use { stmt ->
+                            val rs = stmt.executeQuery("SELECT COUNT(*) + 1 FROM Comments")
+                            if (rs.next()) rs.getInt(1).toString() else "1"
+                        }
+                    } catch (_: Exception) {
+                        "1"
                     }
                 }
 
-                val sql = "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?);"
-                val pstmt = conn.prepareStatement(sql)
-                pstmt.setString(1, finalSlNo)
-                pstmt.setString(2, separater)
-                pstmt.setString(3, jsonDetails)
-                pstmt.setString(4, wef)
-
-                pstmt.executeUpdate()
-                pstmt.close()
+                val sql = "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
+                conn.prepareStatement(sql).use { pstmt ->
+                    pstmt.setString(1, finalSlNo)
+                    pstmt.setString(2, separater)
+                    pstmt.setString(3, jsonDetails)
+                    pstmt.setString(4, wef)
+                    pstmt.executeUpdate()
+                }
                 conn.close()
 
                 call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Record successfully added to queue"))
@@ -64,10 +67,7 @@ fun Route.commentsQueueRoute() {
             e.printStackTrace()
             call.respond(
                 HttpStatusCode.InternalServerError,
-                mapOf(
-                    "error" to (e.localizedMessage ?: "Failed to process queue request"),
-                    "exception" to e.javaClass.simpleName
-                )
+                mapOf("error" to (e.localizedMessage ?: "Failed to process queue request"))
             )
         }
     }
@@ -90,7 +90,7 @@ fun Route.commentsQueueRoute() {
             }
             val rs = pstmt.executeQuery()
 
-            val records = mutableListOf<Map<String, String>>()
+            val records = mutableListOf>()
             while (rs.next()) {
                 records.add(
                     mapOf(
@@ -113,8 +113,6 @@ fun Route.commentsQueueRoute() {
         }
     }
 
-
-    // 1. CONFIRM MUP -> MasterData update kariba & separater ku MUP ru CONF kariba
     post("/api/turso/confirm-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id parameter"))
@@ -143,7 +141,7 @@ fun Route.commentsQueueRoute() {
 
             if (separater == "MUP") {
                 val obj = Json.parseToJsonElement(jsonDetails).jsonObject
-                val empCode = obj["Code_2"]?.jsonPrimitive?.content?.trim() ?: ""
+                val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
 
                 val allowedColumns = setOf(
                     "fathers_name_4", "gender_5", "dob_6", "designation_7", "department_8",
@@ -173,7 +171,6 @@ fun Route.commentsQueueRoute() {
                 }
             }
 
-            // separater ku MUP ru CONF karideba
             conn.prepareStatement("UPDATE Comments SET separater = 'CONF' WHERE id = ?").use { ps ->
                 ps.setString(1, commentId)
                 ps.executeUpdate()
@@ -188,7 +185,6 @@ fun Route.commentsQueueRoute() {
         }
     }
 
-    // 2. REJECT MUP -> MasterData change na kari separater ku REJ kariba
     post("/api/turso/reject-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id parameter"))
