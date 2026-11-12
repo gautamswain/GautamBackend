@@ -1,5 +1,6 @@
 package com.example
 
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -87,7 +88,7 @@ fun Application.module() {
         commentsQueueRoute() 
         currentStaffReportRouting()
 
-	reportMeRouting { TursoDatabaseService.getConnection() }
+        reportMeRouting { TursoDatabaseService.getConnection() }
         
         // SalaryRoutes.kt ର ବ୍ୟାଚ୍ ସାଲାରୀ ରୁଟ୍ ଏଠାରେ ରେଜିଷ୍ଟର୍ କରାଗଲା
         configureSalaryRoutes()
@@ -115,9 +116,46 @@ fun Application.module() {
                 call.respond(mapOf("columns" to TursoDatabaseService.getSalaryTableColumns()))
             }
 
+            // UPDATED: reports table ra 1f (a1..a67 compact JSON) direct return kariba
             get("/branch-summary") {
-                val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }
-                call.respond(summaryList)
+                val conn = TursoDatabaseService.getConnection()
+                if (conn == null) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+                    return@get
+                }
+                try {
+                    conn.use { c ->
+                        c.createStatement().use { stmt ->
+                            val rs = stmt.executeQuery("SELECT f FROM reports WHERE id = '1'")
+                            val jsonStr = if (rs.next()) rs.getString("f") ?: "[]" else "[]"
+                            rs.close()
+                            call.respondText(jsonStr, ContentType.Application.Json)
+                        }
+                    }
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
+            // NEW: reports table ra 1g (Head Office Department-wise compact JSON)
+            get("/head-office") {
+                val conn = TursoDatabaseService.getConnection()
+                if (conn == null) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+                    return@get
+                }
+                try {
+                    conn.use { c ->
+                        c.createStatement().use { stmt ->
+                            val rs = stmt.executeQuery("SELECT g FROM reports WHERE id = '1'")
+                            val jsonStr = if (rs.next()) rs.getString("g") ?: "[]" else "[]"
+                            rs.close()
+                            call.respondText(jsonStr, ContentType.Application.Json)
+                        }
+                    }
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+                }
             }
 
             get("/record/{empId}") {
