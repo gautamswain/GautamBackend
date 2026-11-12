@@ -90,7 +90,7 @@ fun Route.commentsQueueRoute() {
             }
             val rs = pstmt.executeQuery()
 
-            val records = mutableListOf>()
+            val records = mutableListOf<Map<String, String>>()
             while (rs.next()) {
                 records.add(
                     mapOf(
