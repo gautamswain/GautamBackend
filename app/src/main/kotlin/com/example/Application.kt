@@ -44,8 +44,13 @@ fun Application.module() {
         filter { call -> call.request.path().startsWith("/") }
     }
 
-    install(ContentNegotiation) { 
-        json() 
+    install(ContentNegotiation) {
+        json(
+            kotlinx.serialization.json.Json {
+                encodeDefaults = false
+                ignoreUnknownKeys = true
+            }
+        )
     }
 
     // CORS Configuration
