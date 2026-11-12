@@ -100,9 +100,8 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-  // 1f & 1g: Branchwisedata (Using exact 'slno' column from BranchDetails)
+  // 1f & 1g: Branchwisedata (Exact Debug Check)
     fun Branchwisedata(conn: Connection, activeCodes: List<String>): Pair<List<String>, List<String>> {
-        // Mutable list: [empId, branch, designation, slno]
         val rawBranchList = mutableListOf<Array<String>>()
         val headOfficeList = mutableListOf<String>()
         val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
@@ -111,11 +110,38 @@ object ReportMeService {
             return name.trim().lowercase().replace(Regex("\\s+"), " ")
         }
 
-        conn.createStatement().use { stmt ->
-            // 1. MasterData ru active staff fetch kariba
+        val branchSlnoMap = mutableMapOf<String, String>()
+        var debugMsg = ""
+
+        conn.createStatement().use { branchStmt ->
+            try {
+                val branchRs = branchStmt.executeQuery("SELECT * FROM BranchDetails")
+                val meta = branchRs.metaData
+                val cols = (1..meta.columnCount).map { meta.getColumnName(it) }
+                debugMsg = "COLS: $cols"
+
+                while (branchRs.next()) {
+                    // Column index 1 = id, 2 = slno, 4 = branchname (ଆପଣଙ୍କ Excel/Sheet ଫଟୋ ଅନୁସାରେ)
+                    val slnoVal = (branchRs.getString(2) ?: "").trim()
+                    val bName = (branchRs.getString(4) ?: "").trim()
+                    if (bName.isNotBlank() && slnoVal.isNotBlank()) {
+                        branchSlnoMap[normalizeName(bName)] = slnoVal
+                    }
+                }
+                debugMsg += " | LOADED: ${branchSlnoMap.size} branches"
+                branchRs.close()
+            } catch (e: Exception) {
+                debugMsg = "ERR: ${e.message}"
+            }
+        }
+
+        // ପ୍ରଥମ ଆଇଟମ୍ ଭାବେ Debug ମେସେଜ୍ ପକାଇବା ଯାହାଫଳରେ ବ୍ରାଉଜର୍ ରେ ସିଧା ଦେଖାଯିବ
+        rawBranchList.add(arrayOf("DEBUG", debugMsg, "", "0"))
+
+        conn.createStatement().use { empStmt ->
             val seenIds = mutableSetOf<String>()
             try {
-                val empRs = stmt.executeQuery("SELECT * FROM MasterData")
+                val empRs = empStmt.executeQuery("SELECT * FROM MasterData")
                 while (empRs.next()) {
                     val dto = StaffRepository.parseMasterDataDto(empRs)
                     val empId = dto.empId.trim()
@@ -125,9 +151,10 @@ object ReportMeService {
 
                     if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
                         if (branch.contains("head office", ignoreCase = true) || branch.equals("ho", ignoreCase = true)) {
-                            headOfficeList.add("$empId, $branch, $designation") // 1g
+                            headOfficeList.add("$empId, $branch, $designation")
                         } else {
-                            rawBranchList.add(arrayOf(empId, branch, designation, ""))
+                            val matchedSlno = branchSlnoMap[normalizeName(branch)] ?: ""
+                            rawBranchList.add(arrayOf(empId, branch, designation, matchedSlno))
                         }
                     }
                 }
@@ -135,39 +162,13 @@ object ReportMeService {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-
-            // 2. BranchDetails ru sidhasalakha 'slno' o 'branchname' padhiba
-            try {
-                val branchRs = stmt.executeQuery("SELECT slno, branchname FROM BranchDetails")
-                while (branchRs.next()) {
-                    val recordNo = (branchRs.getString("slno") ?: "").trim()
-                    val dbBranchName = (branchRs.getString("branchname") ?: "").trim()
-
-                    if (dbBranchName.isNotBlank()) {
-                        val cleanDbBranch = normalizeName(dbBranchName)
-
-                        for (item in rawBranchList) {
-                            if (normalizeName(item[1]) == cleanDbBranch) {
-                                item[3] = recordNo // slno update karidela
-                            }
-                        }
-                    }
-                }
-                branchRs.close()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
         }
 
-        // 3. slno (1, 2, 3...) krama anuyayi sajai final string list banai deba
         val finalBranchwiseList = rawBranchList
             .sortedBy { it[3].toIntOrNull() ?: 9999 }
             .map { item ->
-                if (item[3].isNotBlank()) {
-                    "${item[0]}, ${item[1]}, ${item[2]}, ${item[3]}"
-                } else {
-                    "${item[0]}, ${item[1]}, ${item[2]}"
-                }
+                if (item[3].isNotBlank()) "${item[0]}, ${item[1]}, ${item[2]}, ${item[3]}"
+                else "${item[0]}, ${item[1]}, ${item[2]}"
             }
 
         return Pair(finalBranchwiseList, headOfficeList)
