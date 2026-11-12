@@ -100,8 +100,9 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-  // 1f & 1g: Branchwisedata (Exact Debug Check)
+  // 1f & 1g: Branchwisedata (Sabu kichhi Branchwisedata bhitare — Branch slno + Designation Rank sorting)
     fun Branchwisedata(conn: Connection, activeCodes: List<String>): Pair<List<String>, List<String>> {
+        // [0]=empId, [1]=branch, [2]=designation, [3]=slno, [4]=desigRank
         val rawBranchList = mutableListOf<Array<String>>()
         val headOfficeList = mutableListOf<String>()
         val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
@@ -110,34 +111,25 @@ object ReportMeService {
             return name.trim().lowercase().replace(Regex("\\s+"), " ")
         }
 
+        // 1. BranchDetails ru (branchname -> slno) map banai neba
         val branchSlnoMap = mutableMapOf<String, String>()
-        var debugMsg = ""
-
         conn.createStatement().use { branchStmt ->
             try {
                 val branchRs = branchStmt.executeQuery("SELECT * FROM BranchDetails")
-                val meta = branchRs.metaData
-                val cols = (1..meta.columnCount).map { meta.getColumnName(it) }
-                debugMsg = "COLS: $cols"
-
                 while (branchRs.next()) {
-                    // Column index 1 = id, 2 = slno, 4 = branchname (ଆପଣଙ୍କ Excel/Sheet ଫଟୋ ଅନୁସାରେ)
                     val slnoVal = (branchRs.getString(2) ?: "").trim()
                     val bName = (branchRs.getString(4) ?: "").trim()
                     if (bName.isNotBlank() && slnoVal.isNotBlank()) {
                         branchSlnoMap[normalizeName(bName)] = slnoVal
                     }
                 }
-                debugMsg += " | LOADED: ${branchSlnoMap.size} branches"
                 branchRs.close()
             } catch (e: Exception) {
-                debugMsg = "ERR: ${e.message}"
+                e.printStackTrace()
             }
         }
 
-        // ପ୍ରଥମ ଆଇଟମ୍ ଭାବେ Debug ମେସେଜ୍ ପକାଇବା ଯାହାଫଳରେ ବ୍ରାଉଜର୍ ରେ ସିଧା ଦେଖାଯିବ
-        rawBranchList.add(arrayOf("DEBUG", debugMsg, "", "0"))
-
+        // 2. MasterData ru active staff fetch kari Branchwisedata bhitare hi rank set kariba
         conn.createStatement().use { empStmt ->
             val seenIds = mutableSetOf<String>()
             try {
@@ -151,10 +143,24 @@ object ReportMeService {
 
                     if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
                         if (branch.contains("head office", ignoreCase = true) || branch.equals("ho", ignoreCase = true)) {
-                            headOfficeList.add("$empId, $branch, $designation")
+                            headOfficeList.add("$empId, $branch, $designation") // 1g
                         } else {
                             val matchedSlno = branchSlnoMap[normalizeName(branch)] ?: ""
-                            rawBranchList.add(arrayOf(empId, branch, designation, matchedSlno))
+                            
+                            // Ethare hi Designation Rank number set heijiba (CO=1, SCO=2, ABM=3, BM=4, AM=5, CM=6)
+                            val d = designation.lowercase()
+                            val desigRank = when {
+                                d == "co" || (d.contains("credit officer") && !d.contains("senior") && !d.contains("sr")) -> "1"
+                                d == "sco" || d.contains("senior credit officer") || d.contains("sr. credit officer") || d.contains("sr credit officer") -> "2"
+                                d == "abm" || d.contains("assistant branch manager") || d.contains("asst. branch manager") || d.contains("asst branch manager") -> "3"
+                                d == "bm" || d == "sr. bm" || d.contains("branch manager") -> "4"
+                                d == "am" || d == "sam" || d.contains("area manager") -> "5"
+                                d == "cm" || d.contains("cluster manager") -> "6"
+                                d.contains("executive") -> "7"
+                                else -> "99"
+                            }
+
+                            rawBranchList.add(arrayOf(empId, branch, designation, matchedSlno, desigRank)) // 1f
                         }
                     }
                 }
@@ -164,8 +170,12 @@ object ReportMeService {
             }
         }
 
+        // 3. Prathame slno (index 3) au ta'pare desigRank (index 4) anuyayi sorting
         val finalBranchwiseList = rawBranchList
-            .sortedBy { it[3].toIntOrNull() ?: 9999 }
+            .sortedWith(
+                compareBy<Array<String>> { it[3].toIntOrNull() ?: 9999 }
+                    .thenBy { it[4].toIntOrNull() ?: 99 }
+            )
             .map { item ->
                 if (item[3].isNotBlank()) "${item[0]}, ${item[1]}, ${item[2]}, ${item[3]}"
                 else "${item[0]}, ${item[1]}, ${item[2]}"
