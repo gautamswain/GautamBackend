@@ -100,44 +100,13 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-  // 1f & 1g: Branchwisedata (Exact BranchDetails 'slno' & 'branchname' Sorting + Head Office Separation)
+  // 1f & 1g: Branchwisedata (1f = Other Branches, 1g = Head Office - ବିନା ସର୍ଟିଂରେ)
     fun Branchwisedata(conn: Connection, activeCodes: List<String>): Pair<List<String>, List<String>> {
-        val rawBranchEmployees = mutableListOf<Triple<String, String, String>>() // empId, branch, designation
+        val branchList = mutableListOf<String>()
         val headOfficeList = mutableListOf<String>()
         val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
 
-        // ବ୍ରାଞ୍ଚ୍ ନାମର extra space ଓ ବଡ଼/ସାନ ଅକ୍ଷର ସଫା କରିବା ପାଇଁ
-        fun normalizeName(name: String): String {
-            return name.trim().lowercase().replace(Regex("\\s+"), " ")
-        }
-
         conn.createStatement().use { stmt ->
-            // 1. BranchDetails ରୁ 'slno' କ୍ରମ ଅନୁସାରେ ସିଧାସଳଖ 'branchname' ଆଣିବା
-            val branchSequence = mutableListOf<String>()
-            try {
-                val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails ORDER BY CAST(slno AS INTEGER) ASC")
-                while (branchRs.next()) {
-                    val bName = (branchRs.getString("branchname") ?: "").trim()
-                    if (bName.isNotBlank()) {
-                        branchSequence.add(normalizeName(bName))
-                    }
-                }
-                branchRs.close()
-            } catch (e: Exception) {
-                // ଯଦି slno ଟେକ୍ସଟ୍ ଥାଏ ବା କିଛି ଏରର୍ ଆସେ, ତେବେ rowid ଅନୁସାରେ ଆଣିବ
-                try {
-                    val rsFallback = stmt.executeQuery("SELECT branchname FROM BranchDetails ORDER BY rowid ASC")
-                    while (rsFallback.next()) {
-                        val bName = (rsFallback.getString("branchname") ?: "").trim()
-                        if (bName.isNotBlank()) {
-                            branchSequence.add(normalizeName(bName))
-                        }
-                    }
-                    rsFallback.close()
-                } catch (_: Exception) {}
-            }
-
-            // 2. MasterData ରୁ ଆକ୍ଟିଭ୍ ଷ୍ଟାଫ୍ ଫେଚ୍ କରିବା
             val seenIds = mutableSetOf<String>()
             try {
                 val empRs = stmt.executeQuery("SELECT * FROM MasterData")
@@ -149,10 +118,13 @@ object ReportMeService {
                     val branch = dto.branchName.trim()
 
                     if (activeSet.contains(empIdUpper) && empId.isNotBlank() && empId != "0" && seenIds.add(empIdUpper)) {
+                        val formattedRecord = "$empId, $branch, $designation"
+                        
+                        // Head Office ଚେକ୍ କରି ଅଲଗା ଅଲଗା ଲିଷ୍ଟରେ ପକାଇବା
                         if (branch.contains("head office", ignoreCase = true) || branch.equals("ho", ignoreCase = true)) {
-                            headOfficeList.add("$empId, $branch, $designation") // 1g ପାଇଁ
+                            headOfficeList.add(formattedRecord) // 1g ପାଇଁ
                         } else {
-                            rawBranchEmployees.add(Triple(empId, branch, designation)) // 1f ପାଇଁ
+                            branchList.add(formattedRecord)     // 1f ପାଇଁ
                         }
                     }
                 }
@@ -160,19 +132,8 @@ object ReportMeService {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-
-            // 3. BranchDetails କ୍ରମ ଅନୁସାରେ 1f କୁ ସଜାଇବା (Sorting)
-            val branchIndexMap = branchSequence.distinct().mapIndexed { index, name -> name to index }.toMap()
-            
-            val sortedBranchList = rawBranchEmployees
-                .sortedBy { emp -> 
-                    val cleanBranch = normalizeName(emp.second)
-                    branchIndexMap[cleanBranch] ?: 999 
-                }
-                .map { emp -> "${emp.first}, ${emp.second}, ${emp.third}" }
-
-            return Pair(sortedBranchList, headOfficeList)
         }
+        return Pair(branchList, headOfficeList)
     }
 
 //-----------------------------------------------------------------------------------------------
