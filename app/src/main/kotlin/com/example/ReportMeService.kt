@@ -100,9 +100,10 @@ object ReportMeService {
     }
 //-------------------------------------------------------------------------------
 
-  // 1f & 1g: Branchwisedata (BranchDetails ru gotie gotie kari padhi branchwise list ku update kariba)
+  // 1f & 1g: Branchwisedata (Using exact 'slno' column from BranchDetails)
     fun Branchwisedata(conn: Connection, activeCodes: List<String>): Pair<List<String>, List<String>> {
-        val branchwiseList = mutableListOf<String>() // Prathame (code, branchname, designation) rahiba
+        // Mutable list: [empId, branch, designation, slno]
+        val rawBranchList = mutableListOf<Array<String>>()
         val headOfficeList = mutableListOf<String>()
         val activeSet = activeCodes.map { it.trim().uppercase() }.toSet()
 
@@ -111,7 +112,7 @@ object ReportMeService {
         }
 
         conn.createStatement().use { stmt ->
-            // 1. MasterData ru active staff fetch kari branchwiseList o headOfficeList banai neba
+            // 1. MasterData ru active staff fetch kariba
             val seenIds = mutableSetOf<String>()
             try {
                 val empRs = stmt.executeQuery("SELECT * FROM MasterData")
@@ -126,7 +127,7 @@ object ReportMeService {
                         if (branch.contains("head office", ignoreCase = true) || branch.equals("ho", ignoreCase = true)) {
                             headOfficeList.add("$empId, $branch, $designation") // 1g
                         } else {
-                            branchwiseList.add("$empId, $branch, $designation") // 1f (initial format)
+                            rawBranchList.add(arrayOf(empId, branch, designation, ""))
                         }
                     }
                 }
@@ -135,7 +136,7 @@ object ReportMeService {
                 e.printStackTrace()
             }
 
-            // 2. Ebe BranchDetails ru sabu record gotie gotie kari padhiba (slno, branchname)
+            // 2. BranchDetails ru sidhasalakha 'slno' o 'branchname' padhiba
             try {
                 val branchRs = stmt.executeQuery("SELECT slno, branchname FROM BranchDetails")
                 while (branchRs.next()) {
@@ -145,12 +146,9 @@ object ReportMeService {
                     if (dbBranchName.isNotBlank()) {
                         val cleanDbBranch = normalizeName(dbBranchName)
 
-                        // branchwiseList re jeunthi branchname match kariba, taku change kari branchno jodi deba
-                        for (i in branchwiseList.indices) {
-                            val parts = branchwiseList[i].split(",").map { it.trim() }
-                            // parts[0] = code, parts[1] = branchname, parts[2] = designation
-                            if (parts.size == 3 && normalizeName(parts[1]) == cleanDbBranch) {
-                                branchwiseList[i] = "${parts[0]}, ${parts[1]}, ${parts[2]}, $recordNo"
+                        for (item in rawBranchList) {
+                            if (normalizeName(item[1]) == cleanDbBranch) {
+                                item[3] = recordNo // slno update karidela
                             }
                         }
                     }
@@ -161,13 +159,18 @@ object ReportMeService {
             }
         }
 
-        // 3. Branchno (1, 2, 3...) krama anuyayi sajai deba (jadi sorting darkar na thae tebe ehi 4 line kati paribe)
-        val sortedBranchwiseList = branchwiseList.sortedBy { record ->
-            val parts = record.split(",").map { it.trim() }
-            if (parts.size >= 4) parts[3].toIntOrNull() ?: 9999 else 9999
-        }
+        // 3. slno (1, 2, 3...) krama anuyayi sajai final string list banai deba
+        val finalBranchwiseList = rawBranchList
+            .sortedBy { it[3].toIntOrNull() ?: 9999 }
+            .map { item ->
+                if (item[3].isNotBlank()) {
+                    "${item[0]}, ${item[1]}, ${item[2]}, ${item[3]}"
+                } else {
+                    "${item[0]}, ${item[1]}, ${item[2]}"
+                }
+            }
 
-        return Pair(sortedBranchwiseList, headOfficeList)
+        return Pair(finalBranchwiseList, headOfficeList)
     }
 
 //-----------------------------------------------------------------------------------------------
