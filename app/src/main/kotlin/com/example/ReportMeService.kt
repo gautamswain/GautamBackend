@@ -185,7 +185,7 @@ object ReportMeService {
                     stmt.executeUpdate("INSERT INTO reports (id, cr, $fieldName) VALUES ('$safeX', 'm', '$safeY')")
                 }
             } catch (_: Exception) {
-                val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE emp_id = '$safeX'")
+                val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE slno = '$safeX'")
                 if (updated == 0) {
                     stmt.executeUpdate("INSERT INTO reports (emp_id, $fieldName) VALUES ('$safeX', '$safeY')")
                 }
