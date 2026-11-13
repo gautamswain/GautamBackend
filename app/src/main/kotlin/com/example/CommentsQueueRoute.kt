@@ -61,6 +61,8 @@ private fun executeTursoHttpSql(sql: String, args: List<String> = emptyList()): 
 }
 
 fun Route.commentsQueueRoute() {
+
+    // 1. Add any record (MUP / NewJ / MSG) to Comments Queue
     post("/api/turso/add-to-queue") {
         try {
             val bodyText = call.receiveText()
@@ -80,13 +82,11 @@ fun Route.commentsQueueRoute() {
             val wef = (jsonElement?.get("wef")?.jsonPrimitive?.contentOrNull
                 ?: java.time.LocalDate.now().toString()).ifBlank { java.time.LocalDate.now().toString() }
 
-            // 1. Try INSERT without id (AUTOINCREMENT) via direct Turso HTTP API
             var (ok, resp) = executeTursoHttpSql(
                 "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)",
                 listOf(slno, separater, jsonDetails, wef)
             )
 
-            // 2. If id is NOT NULL without AUTOINCREMENT, insert with computed next id
             if (!ok && resp.contains("Comments.id", ignoreCase = true)) {
                 val (ok2, resp2) = executeTursoHttpSql(
                     "INSERT INTO Comments (id, slno, separater, jsondetails, wef) VALUES ((SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments), ?, ?, ?, ?)",
@@ -109,6 +109,7 @@ fun Route.commentsQueueRoute() {
         }
     }
 
+    // 2. STAGE 1: Fetch Comments with formatted 'display_message' for NewJ
     get("/api/turso/comments/{separater}") {
         val separater = call.parameters["separater"] ?: "PENDING"
         val conn = TursoDatabaseService.getConnection()
@@ -129,13 +130,36 @@ fun Route.commentsQueueRoute() {
 
             val records = mutableListOf<CommentRecordMap>()
             while (rs.next()) {
+                val rowId = rs.getString("id") ?: ""
+                val rowSlno = rs.getString("slno") ?: ""
+                val rowSep = rs.getString("separater") ?: ""
+                val rawJson = rs.getString("jsondetails") ?: ""
+                val rowWef = rs.getString("wef") ?: ""
+
+                val displayMsg = if (rowSep.equals("NewJ", ignoreCase = true)) {
+                    try {
+                        val obj = Json.parseToJsonElement(rawJson).jsonObject
+                        val empName = (obj["emp_name"]?.jsonPrimitive?.contentOrNull
+                            ?: obj["empName"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
+                        val designation = obj["designation"]?.jsonPrimitive?.contentOrNull.orEmpty().trim()
+                        val branchName = (obj["branch_name"]?.jsonPrimitive?.contentOrNull
+                            ?: obj["branchName"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
+                        "Approval for NewJoining- Mr. $empName, $designation, $branchName- Proceed"
+                    } catch (_: Exception) {
+                        rawJson
+                    }
+                } else {
+                    rawJson
+                }
+
                 records.add(
                     mapOf(
-                        "id" to (rs.getString("id") ?: ""),
-                        "slno" to (rs.getString("slno") ?: ""),
-                        "separater" to (rs.getString("separater") ?: ""),
-                        "jsondetails" to (rs.getString("jsondetails") ?: ""),
-                        "wef" to (rs.getString("wef") ?: "")
+                        "id" to rowId,
+                        "slno" to rowSlno,
+                        "separater" to rowSep,
+                        "jsondetails" to rawJson,
+                        "display_message" to displayMsg,
+                        "wef" to rowWef
                     )
                 )
             }
@@ -150,6 +174,151 @@ fun Route.commentsQueueRoute() {
         }
     }
 
+    // 3. STAGE 2: Confirm NewJ ->
+    //    a) Insert into MasterData with Code_2 = ADKRXXXX
+    //    b) Update existing NewJ comment row separater = 'CONF'
+    //    c) Append new MSG row: "Mr. <Name> Joined at <Branch> branch as <Designation> - Code- ADKRXXXX"
+    post("/api/turso/confirm-newj/{id}") {
+        val commentId = call.parameters["id"]
+            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+
+        val conn = TursoDatabaseService.getConnection()
+            ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+
+        try {
+            var jsonDetails = ""
+            var wefDate = java.time.LocalDate.now().toString()
+
+            val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE id = ?")
+            selectPs.setString(1, commentId)
+            val rs = selectPs.executeQuery()
+            if (rs.next()) {
+                jsonDetails = rs.getString("jsondetails") ?: ""
+                val dbWef = rs.getString("wef") ?: ""
+                if (dbWef.isNotBlank()) wefDate = dbWef
+            }
+            rs.close()
+            selectPs.close()
+
+            if (jsonDetails.isBlank()) {
+                conn.close()
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "NewJ record not found"))
+                return@post
+            }
+
+            // Allow optional edited JSON body from NewJoiningScreen, else use stored JSON
+            val requestBody = try { call.receiveText() } catch (_: Exception) { "" }
+            val effectiveJson = if (requestBody.trim().startsWith("{")) requestBody else jsonDetails
+
+            val obj = Json.parseToJsonElement(effectiveJson).jsonObject
+            fun str(vararg keys: String): String {
+                for (k in keys) {
+                    val v = obj[k]?.jsonPrimitive?.contentOrNull?.trim()
+                    if (!v.isNullOrBlank()) return v
+                }
+                return ""
+            }
+
+            val empName = str("emp_name", "empName")
+            val designation = str("designation")
+            val branchName = str("branch_name", "branchName")
+            val dojVal = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
+
+            // Generate next sl_no_1 and ADKRXXXX Code_2
+            var nextSlNo = 1
+            val st = conn.createStatement()
+            val rsMax = st.executeQuery("SELECT COALESCE(MAX(CAST(sl_no_1 AS INTEGER)), 0) + 1 FROM MasterData")
+            if (rsMax.next()) nextSlNo = rsMax.getInt(1)
+            rsMax.close()
+            st.close()
+
+            val generatedCode = "ADKR${String.format("%04d", nextSlNo)}"
+            conn.close()
+
+            // Insert into MasterData via fast Turso HTTP pipeline (avoids 10s JDBC write timeout)
+            val insertMasterSql = """
+                INSERT INTO MasterData (
+                    sl_no_1, Code_2, employee_name_3, fathers_name_4, gender_5, dob_6,
+                    designation_7, branch_name_9, doj_in_adhikar_10, present_address_11,
+                    permanent_address_12, highest_educational_qualification_13,
+                    personal_contact_number_14, contact_no_2_15, aadhar_card_no_16,
+                    pan_card_no_17, bank_name_19, bank_account_number_20,
+                    ifsc_code_bank_branch_name_21, esi_no_22, epf_uan_no_23,
+                    company_name_starting_from_current_to_old_26, interviewed_31,
+                    emp_status_35, email61_personal_52
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?)
+            """.trimIndent()
+
+            val masterArgs = listOf(
+                nextSlNo.toString(),
+                generatedCode,
+                empName,
+                str("fathers_name", "fathersName"),
+                str("gender"),
+                str("dob"),
+                designation,
+                branchName,
+                str("doj_in_adhikar", "dojInAdhikar"),
+                str("present_address", "presentAddress"),
+                str("permanent_address", "permanentAddress"),
+                str("education"),
+                str("contact_no", "contactNo"),
+                str("contactno_2", "contactno2"),
+                str("aadhar_no", "aadharNo"),
+                str("pan_no", "panNo"),
+                str("bank_name", "bankName"),
+                str("account_no", "accountNo"),
+                str("ifsc_code", "ifscCode"),
+                str("esi"),
+                str("uan_no", "uanNo"),
+                str("company_experience", "companyExperience"),
+                str("interviewd_by", "interviewdBy"),
+                str("email")
+            )
+
+            val (masterOk, masterResp) = executeTursoHttpSql(insertMasterSql, masterArgs)
+            if (!masterOk) {
+                println("MASTERDATA INSERT FAILED: $masterResp")
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "MasterData Insert Failed: $masterResp"))
+                return@post
+            }
+
+            // Update NewJ comment row -> CONF
+            executeTursoHttpSql(
+                "UPDATE Comments SET separater = 'CONF' WHERE id = ?",
+                listOf(commentId)
+            )
+
+            // Append new joining announcement message -> MSG
+            val joiningMsg = "Mr. $empName Joined at $branchName branch as $designation - Code- $generatedCode"
+            val (msgOk, msgResp) = executeTursoHttpSql(
+                "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)",
+                listOf(nextSlNo.toString(), "MSG", joiningMsg, dojVal)
+            )
+            if (!msgOk && msgResp.contains("Comments.id", ignoreCase = true)) {
+                executeTursoHttpSql(
+                    "INSERT INTO Comments (id, slno, separater, jsondetails, wef) VALUES ((SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments), ?, ?, ?, ?)",
+                    listOf(nextSlNo.toString(), "MSG", joiningMsg, dojVal)
+                )
+            }
+
+            println("NEWJ CONFIRMED: code=$generatedCode | msg=$joiningMsg")
+            call.respond(
+                HttpStatusCode.OK,
+                mapOf(
+                    "status" to "confirmed",
+                    "code" to generatedCode,
+                    "message" to joiningMsg
+                )
+            )
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Confirm NewJ failed")))
+        }
+    }
+
+    // 4. Confirm MUP -> Update MasterData & mark CONF
     post("/api/turso/confirm-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
@@ -169,6 +338,7 @@ fun Route.commentsQueueRoute() {
             }
             rs.close()
             selectPs.close()
+            conn.close()
 
             if (separater == "MUP" && jsonDetails.isNotBlank()) {
                 val obj = Json.parseToJsonElement(jsonDetails).jsonObject
@@ -178,18 +348,12 @@ fun Route.commentsQueueRoute() {
 
                 if (empCode.isNotBlank() && updates.isNotEmpty()) {
                     val setClause = updates.keys.joinToString(", ") { "$it = ?" }
-                    val updateMasterPs = conn.prepareStatement("UPDATE MasterData SET $setClause WHERE LOWER(TRIM(Code_2)) = LOWER(TRIM(?))")
-                    var idx = 1
-                    updates.values.forEach { v -> updateMasterPs.setString(idx++, v.jsonPrimitive.content) }
-                    updateMasterPs.setString(idx, empCode)
-                    updateMasterPs.executeUpdate()
-                    updateMasterPs.close()
+                    val args = updates.values.map { it.jsonPrimitive.content } + empCode
+                    executeTursoHttpSql("UPDATE MasterData SET $setClause WHERE LOWER(TRIM(Code_2)) = LOWER(TRIM(?))", args)
                 }
             }
 
             executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE id = ?", listOf(commentId))
-            conn.close()
-
             call.respond(HttpStatusCode.OK, mapOf("status" to "confirmed", "message" to "Confirmed & MasterData updated"))
         } catch (e: Exception) {
             try { conn.close() } catch (_: Exception) {}
@@ -197,6 +361,7 @@ fun Route.commentsQueueRoute() {
         }
     }
 
+    // 5. Reject any pending comment (MUP / NewJ)
     post("/api/turso/reject-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
