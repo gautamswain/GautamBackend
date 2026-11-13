@@ -11,8 +11,10 @@ typealias CommentRecordMap = Map<String, String>
 
 fun Route.commentsQueueRoute() {
     post("/api/turso/add-to-queue") {
-        val bodyText = try { call.receiveText() } catch (e: Exception) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid body: ${e.message}"))
+        val bodyText = try {
+            call.receiveText()
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Body read error: ${e.message}"))
             return@post
         }
 
@@ -32,7 +34,13 @@ fun Route.commentsQueueRoute() {
         val wef = (jsonObj?.get("wef")?.jsonPrimitive?.contentOrNull
             ?: java.time.LocalDate.now().toString()).ifBlank { java.time.LocalDate.now().toString() }
 
-        val conn = TursoDatabaseService.getConnection()
+        val conn = try {
+            TursoDatabaseService.getConnection()
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "DB connect error: ${e.message}"))
+            return@post
+        }
+
         if (conn == null) {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Turso connection is null"))
             return@post
@@ -40,71 +48,19 @@ fun Route.commentsQueueRoute() {
 
         try {
             conn.use { c ->
-                // Check actual columns of Comments table first
-                val existingCols = mutableSetOf<String>()
-                try {
-                    c.createStatement().use { st ->
-                        st.executeQuery("PRAGMA table_info(Comments)").use { rs ->
-                            while (rs.next()) {
-                                existingCols.add(rs.getString("name").lowercase())
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
-
-                if (existingCols.isEmpty()) {
-                    c.createStatement().use { st ->
-                        st.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS Comments (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                slno TEXT,
-                                separater TEXT,
-                                jsondetails TEXT,
-                                wef TEXT
-                            )
-                            """.trimIndent()
-                        )
-                    }
-                }
-
-                // Dynamic INSERT matching existing columns in Comments
-                val nextId = try {
-                    c.createStatement().use { st ->
-                        st.executeQuery("SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments").use { rs ->
-                            if (rs.next()) rs.getInt(1) else 1
-                        }
-                    }
-                } catch (_: Exception) { 1 }
-
-                val inserted = try {
-                    c.prepareStatement("INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)").use { ps ->
-                        ps.setString(1, slno)
-                        ps.setString(2, separater)
-                        ps.setString(3, jsonDetails)
-                        ps.setString(4, wef)
-                        ps.executeUpdate() > 0
-                    }
-                } catch (e1: Exception) {
-                    println("Insert without id failed: ${e1.message}, trying with explicit id=$nextId")
-                    c.prepareStatement("INSERT INTO Comments (id, slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?, ?)").use { ps ->
-                        ps.setInt(1, nextId)
-                        ps.setString(2, slno)
-                        ps.setString(3, separater)
-                        ps.setString(4, jsonDetails)
-                        ps.setString(5, wef)
-                        ps.executeUpdate() > 0
-                    }
-                }
-
-                if (inserted) {
-                    call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Appended to Comments"))
-                } else {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Insert returned 0 rows"))
+                // Single fast round-trip INSERT (avoids 10s multi-query HTTP timeout)
+                val sql = "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
+                c.prepareStatement(sql).use { ps ->
+                    ps.setString(1, slno)
+                    ps.setString(2, separater)
+                    ps.setString(3, jsonDetails)
+                    ps.setString(4, wef)
+                    ps.executeUpdate()
                 }
             }
+            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Appended to Comments"))
         } catch (e: Exception) {
-            println("CRITICAL ADD-TO-QUEUE ERROR: ${e.javaClass.name}: ${e.message}")
+            println("ADD-TO-QUEUE SQL ERROR: ${e.javaClass.name}: ${e.message}")
             e.printStackTrace()
             call.respond(
                 HttpStatusCode.InternalServerError,
