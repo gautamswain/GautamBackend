@@ -10,10 +10,17 @@ import kotlinx.serialization.json.*
 typealias CommentRecordMap = Map<String, String>
 
 fun Route.commentsQueueRoute() {
-    // UNIVERSAL ADD-TO-QUEUE: Jahabi asu, jeuthu asu, direct Comments table re append kariba
     post("/api/turso/add-to-queue") {
-        val bodyText = try { call.receiveText() } catch (_: Exception) { "{}" }
-        val jsonObj = try { Json.parseToJsonElement(bodyText).jsonObject } catch (_: Exception) { null }
+        val bodyText = try { call.receiveText() } catch (e: Exception) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid body: ${e.message}"))
+            return@post
+        }
+
+        val jsonObj = try {
+            Json.parseToJsonElement(bodyText).jsonObject
+        } catch (_: Exception) {
+            null
+        }
 
         val slno = jsonObj?.get("slno")?.jsonPrimitive?.contentOrNull?.ifBlank { "1" } ?: "1"
         val separater = (jsonObj?.get("separater")?.jsonPrimitive?.contentOrNull
@@ -27,44 +34,85 @@ fun Route.commentsQueueRoute() {
 
         val conn = TursoDatabaseService.getConnection()
         if (conn == null) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Turso connection is null"))
             return@post
         }
 
         try {
             conn.use { c ->
-                // Safe insert (works for both AUTOINCREMENT and manual id tables)
+                // Check actual columns of Comments table first
+                val existingCols = mutableSetOf<String>()
                 try {
+                    c.createStatement().use { st ->
+                        st.executeQuery("PRAGMA table_info(Comments)").use { rs ->
+                            while (rs.next()) {
+                                existingCols.add(rs.getString("name").lowercase())
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                if (existingCols.isEmpty()) {
+                    c.createStatement().use { st ->
+                        st.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS Comments (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                slno TEXT,
+                                separater TEXT,
+                                jsondetails TEXT,
+                                wef TEXT
+                            )
+                            """.trimIndent()
+                        )
+                    }
+                }
+
+                // Dynamic INSERT matching existing columns in Comments
+                val nextId = try {
+                    c.createStatement().use { st ->
+                        st.executeQuery("SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments").use { rs ->
+                            if (rs.next()) rs.getInt(1) else 1
+                        }
+                    }
+                } catch (_: Exception) { 1 }
+
+                val inserted = try {
                     c.prepareStatement("INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)").use { ps ->
                         ps.setString(1, slno)
                         ps.setString(2, separater)
                         ps.setString(3, jsonDetails)
                         ps.setString(4, wef)
-                        ps.executeUpdate()
+                        ps.executeUpdate() > 0
                     }
-                } catch (_: Exception) {
-                    val nextId = c.createStatement().use { st ->
-                        val rs = st.executeQuery("SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments")
-                        if (rs.next()) rs.getInt(1) else 1
-                    }
+                } catch (e1: Exception) {
+                    println("Insert without id failed: ${e1.message}, trying with explicit id=$nextId")
                     c.prepareStatement("INSERT INTO Comments (id, slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?, ?)").use { ps ->
                         ps.setInt(1, nextId)
                         ps.setString(2, slno)
                         ps.setString(3, separater)
                         ps.setString(4, jsonDetails)
                         ps.setString(5, wef)
-                        ps.executeUpdate()
+                        ps.executeUpdate() > 0
                     }
                 }
+
+                if (inserted) {
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Appended to Comments"))
+                } else {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Insert returned 0 rows"))
+                }
             }
-            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Appended to Comments"))
         } catch (e: Exception) {
+            println("CRITICAL ADD-TO-QUEUE ERROR: ${e.javaClass.name}: ${e.message}")
             e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Append failed")))
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf("error" to "${e.javaClass.simpleName}: ${e.message}")
+            )
         }
     }
 
-    // Fetch PENDING or specific separater ("MUP", "NewJ", "PENDING")
     get("/api/turso/comments/{separater}") {
         val separater = call.parameters["separater"] ?: "PENDING"
         val conn = TursoDatabaseService.getConnection()
@@ -105,7 +153,6 @@ fun Route.commentsQueueRoute() {
         }
     }
 
-    // Confirm MUP -> MasterData update + separater = 'CONF'
     post("/api/turso/confirm-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
@@ -154,7 +201,6 @@ fun Route.commentsQueueRoute() {
         }
     }
 
-    // Reject -> separater = 'REJ'
     post("/api/turso/reject-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
