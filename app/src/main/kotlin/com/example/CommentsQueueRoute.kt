@@ -7,71 +7,64 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.json.*
 
+typealias CommentRecordMap = Map<String, String>
+
 fun Route.commentsQueueRoute() {
+    // UNIVERSAL ADD-TO-QUEUE: Jahabi asu, jeuthu asu, direct Comments table re append kariba
     post("/api/turso/add-to-queue") {
+        val bodyText = try { call.receiveText() } catch (_: Exception) { "{}" }
+        val jsonObj = try { Json.parseToJsonElement(bodyText).jsonObject } catch (_: Exception) { null }
+
+        val slno = jsonObj?.get("slno")?.jsonPrimitive?.contentOrNull?.ifBlank { "1" } ?: "1"
+        val separater = (jsonObj?.get("separater")?.jsonPrimitive?.contentOrNull
+            ?: jsonObj?.get("separator")?.jsonPrimitive?.contentOrNull
+            ?: "MUP").ifBlank { "MUP" }
+        val jsonDetails = jsonObj?.get("jsondetails")?.jsonPrimitive?.contentOrNull
+            ?: jsonObj?.get("jsonDetails")?.jsonPrimitive?.contentOrNull
+            ?: bodyText
+        val wef = (jsonObj?.get("wef")?.jsonPrimitive?.contentOrNull
+            ?: java.time.LocalDate.now().toString()).ifBlank { java.time.LocalDate.now().toString() }
+
+        val conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@post
+        }
+
         try {
-            val bodyText = call.receiveText()
-            val jsonElement = try {
-                Json.parseToJsonElement(bodyText).jsonObject
-            } catch (e: Exception) {
-                null
-            }
-
-            val separater = jsonElement?.get("separater")?.jsonPrimitive?.contentOrNull
-                ?: jsonElement?.get("separator")?.jsonPrimitive?.contentOrNull
-                ?: "NewJ"
-            val jsonDetails = jsonElement?.get("jsondetails")?.jsonPrimitive?.contentOrNull
-                ?: jsonElement?.get("jsonDetails")?.jsonPrimitive?.contentOrNull
-                ?: bodyText
-            val wef = jsonElement?.get("wef")?.jsonPrimitive?.contentOrNull
-                ?: java.time.LocalDate.now().toString()
-
-            val conn = TursoDatabaseService.getConnection()
-            if (conn == null) {
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
-                return@post
-            }
-
-            try {
-                val passedSlNo = jsonElement?.get("slno")?.jsonPrimitive?.contentOrNull
-                val finalSlNo = if (!passedSlNo.isNullOrBlank()) {
-                    passedSlNo
-                } else {
-                    try {
-                        conn.createStatement().use { stmt ->
-                            val rs = stmt.executeQuery("SELECT COUNT(*) + 1 FROM Comments")
-                            if (rs.next()) rs.getInt(1).toString() else "1"
-                        }
-                    } catch (_: Exception) {
-                        "1"
+            conn.use { c ->
+                // Safe insert (works for both AUTOINCREMENT and manual id tables)
+                try {
+                    c.prepareStatement("INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)").use { ps ->
+                        ps.setString(1, slno)
+                        ps.setString(2, separater)
+                        ps.setString(3, jsonDetails)
+                        ps.setString(4, wef)
+                        ps.executeUpdate()
+                    }
+                } catch (_: Exception) {
+                    val nextId = c.createStatement().use { st ->
+                        val rs = st.executeQuery("SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments")
+                        if (rs.next()) rs.getInt(1) else 1
+                    }
+                    c.prepareStatement("INSERT INTO Comments (id, slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?, ?)").use { ps ->
+                        ps.setInt(1, nextId)
+                        ps.setString(2, slno)
+                        ps.setString(3, separater)
+                        ps.setString(4, jsonDetails)
+                        ps.setString(5, wef)
+                        ps.executeUpdate()
                     }
                 }
-
-                val sql = "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)"
-                conn.prepareStatement(sql).use { pstmt ->
-                    pstmt.setString(1, finalSlNo)
-                    pstmt.setString(2, separater)
-                    pstmt.setString(3, jsonDetails)
-                    pstmt.setString(4, wef)
-                    pstmt.executeUpdate()
-                }
-                conn.close()
-
-                call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Record successfully added to queue"))
-            } catch (dbEx: Exception) {
-                try { conn.close() } catch (_: Exception) {}
-                dbEx.printStackTrace()
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database Error: ${dbEx.localizedMessage}"))
             }
+            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Appended to Comments"))
         } catch (e: Exception) {
             e.printStackTrace()
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                mapOf("error" to (e.localizedMessage ?: "Failed to process queue request"))
-            )
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Append failed")))
         }
     }
 
+    // Fetch PENDING or specific separater ("MUP", "NewJ", "PENDING")
     get("/api/turso/comments/{separater}") {
         val separater = call.parameters["separater"] ?: "PENDING"
         val conn = TursoDatabaseService.getConnection()
@@ -81,127 +74,103 @@ fun Route.commentsQueueRoute() {
         }
 
         try {
-            val pstmt = if (separater.equals("PENDING", ignoreCase = true) || separater.equals("ALL", ignoreCase = true)) {
-                conn.prepareStatement("SELECT * FROM Comments WHERE separater NOT IN ('CONF', 'REJ') ORDER BY id DESC")
-            } else {
-                conn.prepareStatement("SELECT * FROM Comments WHERE separater = ? ORDER BY id DESC").apply {
-                    setString(1, separater)
+            val records = mutableListOf<CommentRecordMap>()
+            conn.use { c ->
+                val pstmt = if (separater.equals("PENDING", ignoreCase = true) || separater.equals("ALL", ignoreCase = true)) {
+                    c.prepareStatement("SELECT * FROM Comments WHERE separater NOT IN ('CONF', 'REJ') ORDER BY id DESC")
+                } else {
+                    c.prepareStatement("SELECT * FROM Comments WHERE separater = ? ORDER BY id DESC").apply {
+                        setString(1, separater)
+                    }
                 }
-            }
-            val rs = pstmt.executeQuery()
-
-            val records = mutableListOf<Map<String, String>>()
-            while (rs.next()) {
-                records.add(
-                    mapOf(
-                        "id" to (rs.getString("id") ?: ""),
-                        "slno" to (rs.getString("slno") ?: ""),
-                        "separater" to (rs.getString("separater") ?: ""),
-                        "jsondetails" to (rs.getString("jsondetails") ?: ""),
-                        "wef" to (rs.getString("wef") ?: "")
-                    )
-                )
-            }
-            rs.close()
-            pstmt.close()
-            conn.close()
-
-            call.respond(records)
-        } catch (e: Exception) {
-            try { conn.close() } catch (_: Exception) {}
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
-        }
-    }
-
-    post("/api/turso/confirm-mup/{id}") {
-        val commentId = call.parameters["id"]
-            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id parameter"))
-
-        val conn = TursoDatabaseService.getConnection()
-            ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
-
-        try {
-            var separater = ""
-            var jsonDetails = ""
-
-            conn.prepareStatement("SELECT separater, jsondetails FROM Comments WHERE id = ?").use { ps ->
-                ps.setString(1, commentId)
-                val rs = ps.executeQuery()
-                if (rs.next()) {
-                    separater = rs.getString("separater") ?: ""
-                    jsonDetails = rs.getString("jsondetails") ?: ""
-                }
-            }
-
-            if (jsonDetails.isBlank()) {
-                conn.close()
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Comment record not found"))
-                return@post
-            }
-
-            if (separater == "MUP") {
-                val obj = Json.parseToJsonElement(jsonDetails).jsonObject
-                val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
-
-                val allowedColumns = setOf(
-                    "fathers_name_4", "gender_5", "dob_6", "designation_7", "department_8",
-                    "branch_name_9", "doj_in_adhikar_10", "present_address_11", "permanent_address_12",
-                    "highest_educational_qualification_13", "personal_contact_number_14", "contact_no_2_15",
-                    "aadhar_card_no_16", "pan_card_no_17", "driving_18", "bank_name_19",
-                    "bank_account_number_20", "ifsc_code_bank_branch_name_21", "esi_no_22",
-                    "epf_uan_no_23", "uan_name_24", "dol_25", "company_name_starting_from_current_to_old_26",
-                    "designationbackcompany_27", "blood_group_28", "ff_29", "status_30", "interviewed_31",
-                    "date_of_resignation_32", "last_working_date_33", "type_of_exit_34", "emp_status_35",
-                    "emp_status_temp_36", "slary_37", "mast_rem_38", "hravariable_39", "daaosa_40",
-                    "arrears_increment_41", "tds_42", "staff_loan_43", "staff_advance_44", "others_45",
-                    "other_earnings_46", "salary_code_47", "sal_h_48", "epf55_49", "esi56_50",
-                    "lender_51", "email61_personal_52", "offer_app_53", "insurancesbi_54", "equifax_55",
-                    "exit_date_56", "idphoto68_57", "mail_id_office_58", "coment77_59", "documentsubmissiondate78_60"
-                )
-
-                val updates = obj.filterKeys { it in allowedColumns }
-                if (empCode.isNotBlank() && updates.isNotEmpty()) {
-                    val setClause = updates.keys.joinToString(", ") { "$it = ?" }
-                    conn.prepareStatement("UPDATE MasterData SET $setClause WHERE LOWER(TRIM(Code_2)) = LOWER(TRIM(?))").use { ps ->
-                        var idx = 1
-                        updates.values.forEach { v -> ps.setString(idx++, v.jsonPrimitive.content) }
-                        ps.setString(idx, empCode)
-                        ps.executeUpdate()
+                pstmt.use { ps ->
+                    ps.executeQuery().use { rs ->
+                        while (rs.next()) {
+                            records.add(
+                                mapOf(
+                                    "id" to (rs.getString("id") ?: ""),
+                                    "slno" to (rs.getString("slno") ?: ""),
+                                    "separater" to (rs.getString("separater") ?: ""),
+                                    "jsondetails" to (rs.getString("jsondetails") ?: ""),
+                                    "wef" to (rs.getString("wef") ?: "")
+                                )
+                            )
+                        }
                     }
                 }
             }
-
-            conn.prepareStatement("UPDATE Comments SET separater = 'CONF' WHERE id = ?").use { ps ->
-                ps.setString(1, commentId)
-                ps.executeUpdate()
-            }
-
-            conn.close()
-            call.respond(HttpStatusCode.OK, mapOf("status" to "confirmed", "message" to "Confirmed & MasterData updated"))
+            call.respond(records)
         } catch (e: Exception) {
-            try { conn.close() } catch (_: Exception) {}
-            e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Confirm failed")))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
 
-    post("/api/turso/reject-mup/{id}") {
+    // Confirm MUP -> MasterData update + separater = 'CONF'
+    post("/api/turso/confirm-mup/{id}") {
         val commentId = call.parameters["id"]
-            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id parameter"))
-
+            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
         val conn = TursoDatabaseService.getConnection()
-            ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "DB failed"))
 
         try {
-            conn.prepareStatement("UPDATE Comments SET separater = 'REJ' WHERE id = ?").use { ps ->
-                ps.setString(1, commentId)
-                ps.executeUpdate()
+            conn.use { c ->
+                var separater = ""
+                var jsonDetails = ""
+                c.prepareStatement("SELECT separater, jsondetails FROM Comments WHERE id = ?").use { ps ->
+                    ps.setString(1, commentId)
+                    ps.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            separater = rs.getString("separater") ?: ""
+                            jsonDetails = rs.getString("jsondetails") ?: ""
+                        }
+                    }
+                }
+
+                if (separater == "MUP" && jsonDetails.isNotBlank()) {
+                    val obj = Json.parseToJsonElement(jsonDetails).jsonObject
+                    val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
+                    val skipCols = setOf("id", "sl_no_1", "Code_2", "employee_name_3")
+                    val updates = obj.filterKeys { it !in skipCols }
+
+                    if (empCode.isNotBlank() && updates.isNotEmpty()) {
+                        val setClause = updates.keys.joinToString(", ") { "$it = ?" }
+                        c.prepareStatement("UPDATE MasterData SET $setClause WHERE LOWER(TRIM(Code_2)) = LOWER(TRIM(?))").use { ps ->
+                            var idx = 1
+                            updates.values.forEach { v -> ps.setString(idx++, v.jsonPrimitive.content) }
+                            ps.setString(idx, empCode)
+                            ps.executeUpdate()
+                        }
+                    }
+                }
+
+                c.prepareStatement("UPDATE Comments SET separater = 'CONF' WHERE id = ?").use { ps ->
+                    ps.setString(1, commentId)
+                    ps.executeUpdate()
+                }
             }
-            conn.close()
+            call.respond(HttpStatusCode.OK, mapOf("status" to "confirmed", "message" to "Confirmed & MasterData updated"))
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Confirm failed")))
+        }
+    }
+
+    // Reject -> separater = 'REJ'
+    post("/api/turso/reject-mup/{id}") {
+        val commentId = call.parameters["id"]
+            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+        val conn = TursoDatabaseService.getConnection()
+            ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "DB failed"))
+
+        try {
+            conn.use { c ->
+                c.prepareStatement("UPDATE Comments SET separater = 'REJ' WHERE id = ?").use { ps ->
+                    ps.setString(1, commentId)
+                    ps.executeUpdate()
+                }
+            }
             call.respond(HttpStatusCode.OK, mapOf("status" to "rejected", "message" to "Rejected"))
         } catch (e: Exception) {
-            try { conn.close() } catch (_: Exception) {}
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Reject failed")))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Reject failed")))
         }
     }
 }
