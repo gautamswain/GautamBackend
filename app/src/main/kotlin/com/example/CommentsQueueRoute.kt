@@ -175,9 +175,10 @@ fun Route.commentsQueueRoute() {
     }
 
     // 3. STAGE 2: Confirm NewJ ->
-    //    a) Insert into MasterData with Code_2 = ADKRXXXX
-    //    b) Update existing NewJ comment row separater = 'CONF'
-    //    c) Append new MSG row: "Mr. <Name> Joined at <Branch> branch as <Designation> - Code- ADKRXXXX"
+    //    a) Get highest (last) Code_2 from MasterData, extract last 4 digits, add +1 -> ADKRXXXX
+    //    b) Insert into MasterData with generated Code_2
+    //    c) Update existing NewJ comment row separater = 'CONF'
+    //    d) Append new MSG row: "Mr. <Name> Joined at <Branch> branch as <Designation> - Code- ADKRXXXX"
     post("/api/turso/confirm-newj/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
@@ -224,18 +225,26 @@ fun Route.commentsQueueRoute() {
             val branchName = str("branch_name", "branchName")
             val dojVal = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
 
-            // Generate next sl_no_1 and ADKRXXXX Code_2
+            // 1. Get next sl_no_1
             var nextSlNo = 1
             val st = conn.createStatement()
-            val rsMax = st.executeQuery("SELECT COALESCE(MAX(CAST(sl_no_1 AS INTEGER)), 0) + 1 FROM MasterData")
-            if (rsMax.next()) nextSlNo = rsMax.getInt(1)
-            rsMax.close()
+            val rsSl = st.executeQuery("SELECT COALESCE(MAX(CAST(sl_no_1 AS INTEGER)), 0) + 1 FROM MasterData")
+            if (rsSl.next()) nextSlNo = rsSl.getInt(1)
+            rsSl.close()
+
+            // 2. Get highest (last) Code_2, take last 4 digits, add +1 -> ADKRXXXX
+            var nextCodeNum = 1
+            val rsCode = st.executeQuery(
+                "SELECT COALESCE(MAX(CAST(SUBSTR(TRIM(Code_2), -4) AS INTEGER)), 0) + 1 FROM MasterData WHERE UPPER(TRIM(Code_2)) LIKE 'ADKR%'"
+            )
+            if (rsCode.next()) nextCodeNum = rsCode.getInt(1)
+            rsCode.close()
             st.close()
 
-            val generatedCode = "ADKR${String.format("%04d", nextSlNo)}"
+            val generatedCode = "ADKR${String.format("%04d", nextCodeNum)}"
             conn.close()
 
-            // Insert into MasterData via fast Turso HTTP pipeline (avoids 10s JDBC write timeout)
+            // Insert into MasterData via fast Turso HTTP pipeline
             val insertMasterSql = """
                 INSERT INTO MasterData (
                     sl_no_1, Code_2, employee_name_3, fathers_name_4, gender_5, dob_6,
