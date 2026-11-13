@@ -6,8 +6,59 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.json.*
+import java.net.HttpURLConnection
+import java.net.URL
 
 typealias CommentRecordMap = Map<String, String>
+
+private fun executeTursoHttpSql(sql: String, args: List<String> = emptyList()): Pair<Boolean, String> {
+    val rawUrl = System.getenv("TURSO_DATABASE_URL")?.trim().orEmpty()
+        .ifBlank { "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io" }
+    val authToken = System.getenv("TURSO_AUTH_TOKEN")?.trim().orEmpty()
+        .ifBlank { "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg" }
+
+    val host = rawUrl
+        .removePrefix("jdbc:sqlite:")
+        .removePrefix("jdbc:dbeaver:libsql:")
+        .removePrefix("libsql://")
+        .removePrefix("https://")
+        .split("]").first().trim().trimEnd('/')
+
+    val endpoint = "https://$host/v2/pipeline"
+
+    val argsJson = args.joinToString(",") { arg ->
+        val escaped = JsonPrimitive(arg).toString()
+        """{"type":"text","value":$escaped}"""
+    }
+    val escapedSql = JsonPrimitive(sql).toString()
+    val bodyPayload = """
+        {
+          "requests": [
+            { "type": "execute", "stmt": { "sql": $escapedSql, "args": [$argsJson] } },
+            { "type": "close" }
+          ]
+        }
+    """.trimIndent()
+
+    val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        connectTimeout = 15000
+        readTimeout = 15000
+        doOutput = true
+        setRequestProperty("Authorization", "Bearer $authToken")
+        setRequestProperty("Content-Type", "application/json")
+    }
+
+    conn.outputStream.use { it.write(bodyPayload.toByteArray(Charsets.UTF_8)) }
+    val code = conn.responseCode
+    val resp = try {
+        (if (code in 200..299) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.use { it.readText() } ?: ""
+    } catch (_: Exception) { "" }
+
+    val hasSqlError = resp.contains("\"type\":\"error\"") || code !in 200..299
+    return (!hasSqlError) to resp
+}
 
 fun Route.commentsQueueRoute() {
     post("/api/turso/add-to-queue") {
@@ -15,54 +66,46 @@ fun Route.commentsQueueRoute() {
             val bodyText = call.receiveText()
             val jsonElement = try {
                 Json.parseToJsonElement(bodyText).jsonObject
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
 
-            val slno = jsonElement?.get("slno")?.jsonPrimitive?.content ?: "1"
-            val separater = jsonElement?.get("separater")?.jsonPrimitive?.content
-                ?: jsonElement?.get("separator")?.jsonPrimitive?.content
-                ?: "NewJ"
-            val jsonDetails = jsonElement?.get("jsondetails")?.jsonPrimitive?.content
-                ?: jsonElement?.get("jsonDetails")?.jsonPrimitive?.content
+            val slno = jsonElement?.get("slno")?.jsonPrimitive?.contentOrNull?.ifBlank { "1" } ?: "1"
+            val separater = (jsonElement?.get("separater")?.jsonPrimitive?.contentOrNull
+                ?: jsonElement?.get("separator")?.jsonPrimitive?.contentOrNull
+                ?: "MUP").ifBlank { "MUP" }
+            val jsonDetails = jsonElement?.get("jsondetails")?.jsonPrimitive?.contentOrNull
+                ?: jsonElement?.get("jsonDetails")?.jsonPrimitive?.contentOrNull
                 ?: bodyText
-            val wef = jsonElement?.get("wef")?.jsonPrimitive?.content
-                ?: java.time.LocalDate.now().toString()
+            val wef = (jsonElement?.get("wef")?.jsonPrimitive?.contentOrNull
+                ?: java.time.LocalDate.now().toString()).ifBlank { java.time.LocalDate.now().toString() }
 
-            val conn = TursoDatabaseService.getConnection()
-            if (conn == null) {
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
-                return@post
-            }
-
-            try {
-                // Exact working pattern from your original CommentsQueueRoute.kt (No .use block)
-                val sql = "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?);"
-                val pstmt = conn.prepareStatement(sql)
-                pstmt.setString(1, slno)
-                pstmt.setString(2, separater)
-                pstmt.setString(3, jsonDetails)
-                pstmt.setString(4, wef)
-
-                pstmt.executeUpdate()
-                pstmt.close()
-                conn.close()
-
-                call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Record successfully added to queue"))
-            } catch (dbEx: Exception) {
-                try { conn.close() } catch (_: Exception) {}
-                dbEx.printStackTrace()
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database Error: ${dbEx.message}"))
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                mapOf(
-                    "error" to (e.message ?: "Failed to process queue request"),
-                    "exception" to e.javaClass.simpleName
-                )
+            // 1. Try INSERT without id (AUTOINCREMENT) via direct Turso HTTP API
+            var (ok, resp) = executeTursoHttpSql(
+                "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)",
+                listOf(slno, separater, jsonDetails, wef)
             )
+
+            // 2. If id is NOT NULL without AUTOINCREMENT, insert with computed next id
+            if (!ok && resp.contains("Comments.id", ignoreCase = true)) {
+                val (ok2, resp2) = executeTursoHttpSql(
+                    "INSERT INTO Comments (id, slno, separater, jsondetails, wef) VALUES ((SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM Comments), ?, ?, ?, ?)",
+                    listOf(slno, separater, jsonDetails, wef)
+                )
+                ok = ok2
+                resp = resp2
+            }
+
+            if (ok) {
+                println("TURSO HTTP INSERT SUCCESS: separater=$separater, slno=$slno")
+                call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Record successfully added to queue"))
+            } else {
+                println("TURSO HTTP INSERT FAILED: $resp")
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Turso Error: $resp"))
+            }
+        } catch (t: Throwable) {
+            println("ADD-TO-QUEUE ERROR: ${t.javaClass.name}: ${t.message}")
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "${t.javaClass.simpleName}: ${t.message}"))
         }
     }
 
@@ -129,7 +172,7 @@ fun Route.commentsQueueRoute() {
 
             if (separater == "MUP" && jsonDetails.isNotBlank()) {
                 val obj = Json.parseToJsonElement(jsonDetails).jsonObject
-                val empCode = obj["Code_2"]?.jsonPrimitive?.content?.trim() ?: ""
+                val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
                 val skipCols = setOf("id", "sl_no_1", "Code_2", "employee_name_3")
                 val updates = obj.filterKeys { it !in skipCols }
 
@@ -144,10 +187,7 @@ fun Route.commentsQueueRoute() {
                 }
             }
 
-            val confPs = conn.prepareStatement("UPDATE Comments SET separater = 'CONF' WHERE id = ?")
-            confPs.setString(1, commentId)
-            confPs.executeUpdate()
-            confPs.close()
+            executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE id = ?", listOf(commentId))
             conn.close()
 
             call.respond(HttpStatusCode.OK, mapOf("status" to "confirmed", "message" to "Confirmed & MasterData updated"))
@@ -160,20 +200,12 @@ fun Route.commentsQueueRoute() {
     post("/api/turso/reject-mup/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
-        val conn = TursoDatabaseService.getConnection()
-            ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
 
-        try {
-            val rejPs = conn.prepareStatement("UPDATE Comments SET separater = 'REJ' WHERE id = ?")
-            rejPs.setString(1, commentId)
-            rejPs.executeUpdate()
-            rejPs.close()
-            conn.close()
-
+        val (ok, resp) = executeTursoHttpSql("UPDATE Comments SET separater = 'REJ' WHERE id = ?", listOf(commentId))
+        if (ok) {
             call.respond(HttpStatusCode.OK, mapOf("status" to "rejected", "message" to "Rejected"))
-        } catch (e: Exception) {
-            try { conn.close() } catch (_: Exception) {}
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Reject failed")))
+        } else {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Reject failed: $resp"))
         }
     }
 }
