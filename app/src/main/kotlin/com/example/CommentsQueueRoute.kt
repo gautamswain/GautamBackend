@@ -175,7 +175,7 @@ fun Route.commentsQueueRoute() {
     }
 
     // 3. STAGE 2: Confirm NewJ ->
-    //    a) Get highest (last) Code_2 from MasterData, extract last 4 digits, add +1 -> ADKRXXXX
+    //    a) Cross-verify last 5th row + 5 AND last 3rd row + 3 for sl_no_1 & Code_2 (ADKRXXXX)
     //    b) Insert into MasterData with generated Code_2
     //    c) Update existing NewJ comment row separater = 'CONF'
     //    d) Append new MSG row: "Mr. <Name> Joined at <Branch> branch as <Designation> - Code- ADKRXXXX"
@@ -225,23 +225,50 @@ fun Route.commentsQueueRoute() {
             val branchName = str("branch_name", "branchName")
             val dojVal = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
 
-            // 1. Get next sl_no_1
-            var nextSlNo = 1
+            // Last 5th row + 5 AND Last 3rd row + 3 cross-verification for sl_no_1 & Code_2
             val st = conn.createStatement()
-            val rsSl = st.executeQuery("SELECT COALESCE(MAX(CAST(sl_no_1 AS INTEGER)), 0) + 1 FROM MasterData")
-            if (rsSl.next()) nextSlNo = rsSl.getInt(1)
-            rsSl.close()
-
-            // 2. Get highest (last) Code_2, take last 4 digits, add +1 -> ADKRXXXX
-            var nextCodeNum = 1
-            val rsCode = st.executeQuery(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(TRIM(Code_2), -4) AS INTEGER)), 0) + 1 FROM MasterData WHERE UPPER(TRIM(Code_2)) LIKE 'ADKR%'"
+            val rsRecent = st.executeQuery(
+                "SELECT TRIM(sl_no_1), TRIM(Code_2) FROM MasterData WHERE UPPER(TRIM(Code_2)) LIKE 'ADKR%' ORDER BY rowid DESC LIMIT 5"
             )
-            if (rsCode.next()) nextCodeNum = rsCode.getInt(1)
-            rsCode.close()
+            val recentRows = mutableListOf<Pair<Int, Int>>() // (slNo, last4DigitsOfCode)
+            while (rsRecent.next()) {
+                val sNum = rsRecent.getString(1)?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
+                val cRaw = rsRecent.getString(2) ?: ""
+                val cNum = cRaw.replace(Regex("[^0-9]"), "").takeLast(4).toIntOrNull() ?: 0
+                recentRows.add(sNum to cNum)
+            }
+            rsRecent.close()
             st.close()
 
-            val generatedCode = "ADKR${String.format("%04d", nextCodeNum)}"
+            if (recentRows.size < 5) {
+                conn.close()
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "MasterData has fewer than 5 rows for sequence check"))
+                return@post
+            }
+
+            // recentRows[0] = last 1st, recentRows[2] = last 3rd, recentRows[4] = last 5th
+            val (sl3rd, code3rd) = recentRows[2]
+            val (sl5th, code5th) = recentRows[4]
+
+            val expectedSlFrom3rd = sl3rd + 3
+            val expectedSlFrom5th = sl5th + 5
+
+            val expectedCodeFrom3rd = code3rd + 3
+            val expectedCodeFrom5th = code5th + 5
+
+            if (expectedCodeFrom3rd != expectedCodeFrom5th || expectedSlFrom3rd != expectedSlFrom5th) {
+                conn.close()
+                call.respond(
+                    HttpStatusCode.Conflict,
+                    mapOf(
+                        "error" to "Sequence mismatch in MasterData: 5th-last ($code5th + 5 = $expectedCodeFrom5th) != 3rd-last ($code3rd + 3 = $expectedCodeFrom3rd)"
+                    )
+                )
+                return@post
+            }
+
+            val nextSlNo = expectedSlFrom5th
+            val generatedCode = "ADKR${String.format("%04d", expectedCodeFrom5th)}"
             conn.close()
 
             // Insert into MasterData via fast Turso HTTP pipeline
