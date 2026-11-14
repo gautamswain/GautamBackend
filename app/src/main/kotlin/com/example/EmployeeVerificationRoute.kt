@@ -11,6 +11,7 @@ import java.time.format.DateTimeFormatterBuilder
 import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoField
 import java.util.Locale
+import java.sql.Connection
 import kotlinx.serialization.json.*
 
 @kotlinx.serialization.Serializable
@@ -90,6 +91,55 @@ object VerhoeffValidator {
             c = d[c][p[i % 8][myArray[i]]]
         }
         return c == 0
+    }
+}
+
+private object MasterCache {
+    private var cachedBranches: Set<String> = emptySet()
+    private var cachedDesignations: Set<String> = emptySet()
+    private var lastFetchTime: Long = 0L
+    private const val TTL_MS = 10 * 60 * 1000L // 10 minutes
+
+    @Synchronized
+    fun getBranchesAndDesignations(conn: Connection): Pair<Set<String>, Set<String>> {
+        val now = System.currentTimeMillis()
+        if (cachedBranches.isNotEmpty() && cachedDesignations.isNotEmpty() && (now - lastFetchTime < TTL_MS)) {
+            return Pair(cachedBranches, cachedDesignations)
+        }
+
+        val branches = mutableSetOf<String>()
+        val designations = mutableSetOf<String>()
+
+        try {
+            val stmt = conn.createStatement()
+            try {
+                val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
+                while (branchRs.next()) {
+                    val b = branchRs.getString(1)
+                    if (!b.isNullOrBlank()) branches.add(b.trim().lowercase())
+                }
+                branchRs.close()
+            } catch (_: Exception) {}
+
+            try {
+                val desigRs = stmt.executeQuery("SELECT designation FROM Designation")
+                while (desigRs.next()) {
+                    val d = desigRs.getString(1)
+                    if (!d.isNullOrBlank()) designations.add(d.trim().lowercase())
+                }
+                desigRs.close()
+            } catch (_: Exception) {}
+
+            stmt.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (branches.isNotEmpty()) cachedBranches = branches
+        if (designations.isNotEmpty()) cachedDesignations = designations
+        lastFetchTime = now
+
+        return Pair(cachedBranches, cachedDesignations)
     }
 }
 
@@ -179,39 +229,12 @@ fun Route.employeeVerificationRoute() {
             val isDojValid = isValidDate(cleanDoj)
             val dojMessage = if (isDojValid) "DOJ format is valid." else "Invalid DOJ format."
 
-            // Fetch DB Master lists for Branch and Designation verification
-            val dbBranches = mutableSetOf<String>()
-            val dbDesignations = mutableSetOf<String>()
+            // Fetch DB Master lists for Branch and Designation verification using MasterCache (10-min TTL)
             val conn = TursoDatabaseService.getConnection()
-
-            if (conn != null) {
-                try {
-                    val stmt = conn.createStatement()
-                    
-                    // Load BranchDetails using updated 'branchnmae' column
-                    try {
-                        val branchRs = stmt.executeQuery("SELECT branchname FROM BranchDetails")
-                        while (branchRs.next()) {
-                            val b = branchRs.getString(1)
-                            if (!b.isNullOrBlank()) dbBranches.add(b.trim().lowercase())
-                        }
-                        branchRs.close()
-                    } catch (_: Exception) {}
-
-                    // Load Designations
-                    try {
-                        val desigRs = stmt.executeQuery("SELECT designation FROM Designation")
-                        while (desigRs.next()) {
-                            val d = desigRs.getString(1)
-                            if (!d.isNullOrBlank()) dbDesignations.add(d.trim().lowercase())
-                        }
-                        desigRs.close()
-                    } catch (_: Exception) {}
-
-                    stmt.close()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+            val (dbBranches, dbDesignations) = if (conn != null) {
+                MasterCache.getBranchesAndDesignations(conn)
+            } else {
+                Pair(emptySet(), emptySet())
             }
 
             val normalizedBranch = cleanBranch.lowercase()
@@ -222,48 +245,92 @@ fun Route.employeeVerificationRoute() {
             val isDesignationValid = cleanDesignation.isNotBlank() && (dbDesignations.isEmpty() || dbDesignations.contains(normalizedDesignation))
             val designationMessage = if (isDesignationValid) "Designation is valid." else "Designation not found in master records."
 
-            // Turso MasterData Duplicate Check
+            // Turso MasterData Duplicate Check (Optimized dynamic SQL WHERE query)
             val matchedRecords = mutableListOf<MatchedDatabaseRecord>()
 
             if (conn != null) {
                 try {
-                    val query = "SELECT * FROM MasterData LIMIT 500"
-                    val stmt = conn.createStatement()
-                    val rs = stmt.executeQuery(query)
-                    
-                    while (rs.next()) {
-                        val dbEmpId = try { rs.getString("Code_2") ?: rs.getString("code") ?: rs.getString("emp_id") } catch (_: Exception) { "" }
-                        val dbEmpName = try { rs.getString("employee_name_3") ?: rs.getString("employee_name") } catch (_: Exception) { "" }
-                        val dbFatherName = try { rs.getString("fathers_name_4") ?: rs.getString("fathers_name") } catch (_: Exception) { "" }
-                        val dbBranch = try { rs.getString("branch_name_9") ?: rs.getString("branchname") } catch (_: Exception) { "" }
-                        val dbPan = try { rs.getString("pan_card_no_17") ?: rs.getString("pan") } catch (_: Exception) { "" }
-                        val dbAadhar = try { rs.getString("aadhar_card_no_16") ?: rs.getString("aadhar") } catch (_: Exception) { "" }
-                        val dbAccount = try { rs.getString("bank_account_number_20") ?: rs.getString("account_no") } catch (_: Exception) { "" }
-                        val dbPhone1 = try { rs.getString("personal_contact_number_14") } catch (_: Exception) { "" }
-                        val dbPhone2 = try { rs.getString("contact_no_2_15") } catch (_: Exception) { "" }
+                    val conditions = mutableListOf<String>()
+                    val params = mutableListOf<Any>()
 
-                        val matchedFields = mutableListOf<String>()
-                        if (cleanPan.isNotBlank() && cleanPan.equals(dbPan, ignoreCase = true)) matchedFields.add("PAN Number")
-                        if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("[^0-9]"), "")) matchedFields.add("Aadhaar Number")
-                        if (cleanAccount.isNotBlank() && cleanAccount == dbAccount.trim()) matchedFields.add("Bank Account Number")
-                        if (contactNo.isNotBlank() && (contactNo.trim() == dbPhone1.trim() || contactNo.trim() == dbPhone2.trim())) matchedFields.add("Phone Number 1")
-                        if (contactNo2.isNotBlank() && (contactNo2.trim() == dbPhone1.trim() || contactNo2.trim() == dbPhone2.trim())) matchedFields.add("Phone Number 2")
-                        if (fathersName.isNotBlank() && fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) matchedFields.add("Father's Name")
-
-                        if (matchedFields.isNotEmpty()) {
-                            matchedRecords.add(
-                                MatchedDatabaseRecord(
-                                    empId = dbEmpId ?: "",
-                                    employeeName = dbEmpName ?: "",
-                                    fathersName = dbFatherName ?: "",
-                                    branchName = dbBranch ?: "",
-                                    matchedFields = matchedFields
-                                )
-                            )
-                        }
+                    if (cleanPan.isNotBlank()) {
+                        conditions.add("UPPER(TRIM(pan_card_no_17)) = ?")
+                        params.add(cleanPan)
                     }
-                    rs.close()
-                    stmt.close()
+                    if (cleanAadhar.isNotBlank()) {
+                        conditions.add("REPLACE(TRIM(aadhar_card_no_16), ' ', '') = ?")
+                        params.add(cleanAadhar)
+                    }
+                    if (cleanAccount.isNotBlank()) {
+                        conditions.add("TRIM(bank_account_number_20) = ?")
+                        params.add(cleanAccount)
+                    }
+                    if (contactNo.isNotBlank()) {
+                        conditions.add("(TRIM(personal_contact_number_14) IN (?, ?) OR TRIM(contact_no_2_15) IN (?, ?))")
+                        params.add(contactNo.trim())
+                        params.add(contactNo.trim())
+                        params.add(contactNo.trim())
+                        params.add(contactNo.trim())
+                    } else if (contactNo2.isNotBlank()) {
+                        conditions.add("(TRIM(personal_contact_number_14) IN (?, ?) OR TRIM(contact_no_2_15) IN (?, ?))")
+                        params.add(contactNo2.trim())
+                        params.add(contactNo2.trim())
+                        params.add(contactNo2.trim())
+                        params.add(contactNo2.trim())
+                    }
+                    if (fathersName.isNotBlank()) {
+                        conditions.add("LOWER(TRIM(fathers_name_4)) = ?")
+                        params.add(fathersName.trim().lowercase())
+                    }
+
+                    if (conditions.isNotEmpty()) {
+                        val query = """
+                            SELECT Code_2, employee_name_3, fathers_name_4, branch_name_9, pan_card_no_17, aadhar_card_no_16, bank_account_number_20, personal_contact_number_14, contact_no_2_15 
+                            FROM MasterData 
+                            WHERE ${conditions.joinToString(" OR ")} 
+                            LIMIT 50
+                        """.trimIndent()
+
+                        val pstmt = conn.prepareStatement(query)
+                        params.forEachIndexed { idx, p ->
+                            pstmt.setString(idx + 1, p.toString())
+                        }
+
+                        val rs = pstmt.executeQuery()
+                        while (rs.next()) {
+                            val dbEmpId = rs.getString("Code_2") ?: ""
+                            val dbEmpName = rs.getString("employee_name_3") ?: ""
+                            val dbFatherName = rs.getString("fathers_name_4") ?: ""
+                            val dbBranch = rs.getString("branch_name_9") ?: ""
+                            val dbPan = rs.getString("pan_card_no_17") ?: ""
+                            val dbAadhar = rs.getString("aadhar_card_no_16") ?: ""
+                            val dbAccount = rs.getString("bank_account_number_20") ?: ""
+                            val dbPhone1 = rs.getString("personal_contact_number_14") ?: ""
+                            val dbPhone2 = rs.getString("contact_no_2_15") ?: ""
+
+                            val matchedFields = mutableListOf<String>()
+                            if (cleanPan.isNotBlank() && cleanPan.equals(dbPan.trim(), ignoreCase = true)) matchedFields.add("PAN Number")
+                            if (cleanAadhar.isNotBlank() && cleanAadhar == dbAadhar.replace(Regex("[^0-9]"), "")) matchedFields.add("Aadhaar Number")
+                            if (cleanAccount.isNotBlank() && cleanAccount == dbAccount.trim()) matchedFields.add("Bank Account Number")
+                            if (contactNo.isNotBlank() && (contactNo.trim() == dbPhone1.trim() || contactNo.trim() == dbPhone2.trim())) matchedFields.add("Phone Number 1")
+                            if (contactNo2.isNotBlank() && (contactNo2.trim() == dbPhone1.trim() || contactNo2.trim() == dbPhone2.trim())) matchedFields.add("Phone Number 2")
+                            if (fathersName.isNotBlank() && fathersName.trim().equals(dbFatherName.trim(), ignoreCase = true)) matchedFields.add("Father's Name")
+
+                            if (matchedFields.isNotEmpty()) {
+                                matchedRecords.add(
+                                    MatchedDatabaseRecord(
+                                        empId = dbEmpId,
+                                        employeeName = dbEmpName,
+                                        fathersName = dbFatherName,
+                                        branchName = dbBranch,
+                                        matchedFields = matchedFields
+                                    )
+                                )
+                            }
+                        }
+                        rs.close()
+                        pstmt.close()
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 } finally {

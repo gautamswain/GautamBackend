@@ -46,8 +46,19 @@ fun Route.configureSalaryRoutes() {
 private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
     if (ids.isEmpty()) return emptyList()
 
-    val tursoUrl = "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io/v2/pipeline"
-    val authToken = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg"
+    val rawUrl = System.getenv("TURSO_DATABASE_URL")?.trim().orEmpty()
+        .ifBlank { "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io" }
+    val authToken = System.getenv("TURSO_AUTH_TOKEN")?.trim().orEmpty()
+        .ifBlank { throw IllegalStateException("TURSO_AUTH_TOKEN missing") }
+
+    val host = rawUrl
+        .removePrefix("jdbc:sqlite:")
+        .removePrefix("jdbc:dbeaver:libsql:")
+        .removePrefix("libsql://")
+        .removePrefix("https://")
+        .split("]").first().trim().trimEnd('/')
+
+    val tursoUrl = "https://$host/v2/pipeline"
 
     val placeholders = ids.joinToString(",") { "?" }
     val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
@@ -79,6 +90,8 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
     val url = URL(tursoUrl)
     val conn = (url.openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
+        connectTimeout = 15000
+        readTimeout = 15000
         setRequestProperty("Content-Type", "application/json")
         setRequestProperty("Authorization", "Bearer $authToken")
         doOutput = true

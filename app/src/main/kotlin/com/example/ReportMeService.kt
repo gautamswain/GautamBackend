@@ -73,20 +73,20 @@ object ReportMeService {
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
         val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
-        
+
         conn.createStatement().use { stmt ->
             val rs = stmt.executeQuery(query)
             val allRows = mutableListOf<Pair<String, String>>()
-            
+
             while (rs.next()) {
                 val month = rs.getString(1) ?: ""
                 val empId = rs.getString(2) ?: ""
                 allRows.add(Pair(month, empId))
             }
             rs.close()
-            
+
             val distinctMonths = allRows.map { it.first }.filter { it.isNotBlank() }.distinct().take(2)
-            
+
             for (row in allRows) {
                 val month = row.first
                 val empId = row.second
@@ -285,7 +285,7 @@ object ReportMeService {
     fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
         val safeX = x.replace("'", "''")
         val safeY = y.replace("'", "''")
-        
+
         conn.createStatement().use { stmt ->
             try {
                 val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE id = '$safeX'")
@@ -347,5 +347,42 @@ object ReportMeService {
             totalHeadOfficeDeptCount = hList.size,
             headOfficeCodes = hList
         )
+    }
+
+    @Volatile
+    private var isRunning = false
+
+    @Volatile
+    private var rerunRequested = false
+
+    // Jekounasi route/service ru 1-line re call kariba pain: ReportMeService.triggerAsync()
+    fun triggerAsync() {
+        if (isRunning) {
+            rerunRequested = true
+            return
+        }
+        isRunning = true
+
+        Thread {
+            try {
+                do {
+                    rerunRequested = false
+                    var conn: Connection? = null
+                    try {
+                        conn = TursoDatabaseService.getConnection()
+                        if (conn != null) {
+                            processAndSave(conn)
+                            println("REPORTME SERVICE: reports updated successfully")
+                        }
+                    } catch (e: Exception) {
+                        println("REPORTME SERVICE ERROR: ${e.message}")
+                    } finally {
+                        try { conn?.close() } catch (_: Exception) {}
+                    }
+                } while (rerunRequested)
+            } finally {
+                isRunning = false
+            }
+        }.start()
     }
 }

@@ -13,6 +13,7 @@ import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.callloging.CallLogging
+import io.ktor.server.plugins.compression.*
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.request.path
@@ -43,6 +44,10 @@ fun Application.module() {
     install(CallLogging) {
         level = Level.INFO
         filter { call -> call.request.path().startsWith("/") }
+    }
+
+    install(Compression) {
+        gzip { priority = 1.0 }
     }
 
     install(ContentNegotiation) {
@@ -271,7 +276,25 @@ fun Application.module() {
                 }
             }
 
+            post("/upload-branch-summary-report") {
+                try {
+                    val fileName = GoogleDriveReportService.uploadBranchSummaryReport()
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
             get("/upload-staff-status-report") {
+                try {
+                    val fileName = GoogleDriveReportService.uploadStaffStatusReport()
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
+            post("/upload-staff-status-report") {
                 try {
                     val fileName = GoogleDriveReportService.uploadStaffStatusReport()
                     call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))

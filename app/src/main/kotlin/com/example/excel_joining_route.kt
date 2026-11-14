@@ -26,8 +26,27 @@ data class DesignationEntity(
 )
 
 object MasterDataRepository {
-    // Fetch official branch names dynamically from BranchDetails table (`branchnmae` column)
+    private var cachedBranches: List<String> = emptyList()
+    private var cachedDesignations: List<DesignationEntity> = emptyList()
+    private var lastFetchTime: Long = 0L
+    private const val TTL_MS = 10 * 60 * 1000L // 10 minutes
+
+    // Clear/refresh cache helper method
+    @Synchronized
+    fun clearCache() {
+        cachedBranches = emptyList()
+        cachedDesignations = emptyList()
+        lastFetchTime = 0L
+    }
+
+    // Fetch official branch names dynamically with 10-minute TTL cache
+    @Synchronized
     fun getOfficialBranches(): List<String> {
+        val now = System.currentTimeMillis()
+        if (cachedBranches.isNotEmpty() && (now - lastFetchTime < TTL_MS)) {
+            return cachedBranches
+        }
+
         val branchList = mutableListOf<String>()
         val conn = TursoDatabaseService.getConnection()
         if (conn != null) {
@@ -45,13 +64,13 @@ object MasterDataRepository {
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                conn.close()
+                try { conn.close() } catch (_: Exception) {}
             }
         }
         
         // Fallback list if DB connection fails or table is empty
         if (branchList.isEmpty()) {
-            return listOf(
+            cachedBranches = listOf(
                 "Barpali", "Sohela", "Padampur", "Kesinga", "Tarbha", "Th.Rampur", "Koraput", "Kotpad",
                 "Semeliguda", "Mathili", "Ambadola", "Rayagada", "Karanjia", "Keonjhar", "Ghatagaon",
                 "Anandpur", "Raikia", "Baliguda", "Phulbani", "Kamarda", "Agarapada", "Bhadrak",
@@ -59,12 +78,21 @@ object MasterDataRepository {
                 "Baranga", "Kandarpur", "Phulanakhara", "Balakati", "Puri", "Sakhigopal", "Balugaon",
                 "Malkangiri", "Kalampur"
             )
+        } else {
+            cachedBranches = branchList
         }
-        return branchList
+        lastFetchTime = now
+        return cachedBranches
     }
 
-    // Fetch official designations dynamically from Designation table
+    // Fetch official designations dynamically with 10-minute TTL cache
+    @Synchronized
     fun getOfficialDesignations(): List<DesignationEntity> {
+        val now = System.currentTimeMillis()
+        if (cachedDesignations.isNotEmpty() && (now - lastFetchTime < TTL_MS)) {
+            return cachedDesignations
+        }
+
         val list = mutableListOf<DesignationEntity>()
         val conn = TursoDatabaseService.getConnection()
         if (conn != null) {
@@ -88,10 +116,12 @@ object MasterDataRepository {
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                conn.close()
+                try { conn.close() } catch (_: Exception) {}
             }
         }
-        return list
+        cachedDesignations = list
+        lastFetchTime = now
+        return cachedDesignations
     }
 }
 
@@ -216,10 +246,12 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Read rows (up to 10 rows)
-                    for (row in sheet.take(10)) {
+                    // Skip header row and process up to 100 rows
+                    for (row in sheet.drop(1).take(100)) {
                         val slNo = getCellString(row, 0)
                         val rawEmpName = getCellString(row, 1)
+
+                        println("Row Check -> Sl.No: '$slNo', Emp Name: '$rawEmpName'")
 
                         if (slNo.isNotBlank() && rawEmpName.isNotBlank() && slNo.lowercase() != "sl.no") {
                             val rawAadhar = getCellString(row, 13)

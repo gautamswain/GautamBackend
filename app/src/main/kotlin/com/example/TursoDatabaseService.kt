@@ -3,7 +3,6 @@ package com.example
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.DriverManager
-import java.sql.ResultSet
 import java.util.Properties
 
 object TursoDatabaseService {
@@ -19,7 +18,10 @@ object TursoDatabaseService {
         val envToken = System.getenv("TURSO_AUTH_TOKEN")?.trim() ?: ""
 
         val rawUrl = if (envUrl.isNotBlank()) envUrl else "https://adhikarhr-gautamswain.aws-ap-south-1.turso.io"
-        authToken = if (envToken.isNotBlank()) envToken else "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI5MzM2NTIsImlkIjoiMDFhMTczMGItZGYwMS03ODc3LWEwZTctZDI4MGY3ODczYmMzIiwia2lkIjoiSFNDdE1aWHdidGJ4allfeERJMWV2ZjBERHJ3WU1odlVyb0k4dnBHX25EayIsInJpZCI6ImUzNzM5ODAzLWE2NjEtNDlhNS1hMmFkLTg4YzMzNDk2Y2FmNiJ9.HXc7gy5g_F_qilsgjsSC1aG_GrV1-TvX-3i6Py1EwAM77R6EuUpB4_0pmnE5215WIIbk3sD7lqI72lTF3mo8Cg"
+        authToken = envToken
+        if (authToken.isBlank()) {
+            initErrorLog = "TURSO_AUTH_TOKEN missing"
+        }
 
         val cleanUrl = rawUrl
             .removePrefix("jdbc:sqlite:")
@@ -34,8 +36,12 @@ object TursoDatabaseService {
 
         try {
             Class.forName("com.dbeaver.jdbc.driver.libsql.LibSqlDriver")
-            initErrorLog = "INITIALIZED"
-            logger.info("Turso driver initialized with host: $cleanUrl")
+            if (authToken.isBlank()) {
+                logger.warn("Turso driver initialized, but TURSO_AUTH_TOKEN is missing!")
+            } else {
+                initErrorLog = "INITIALIZED"
+                logger.info("Turso driver initialized with host: $cleanUrl")
+            }
         } catch (e: Exception) {
             initErrorLog = "Driver Load Error: ${e.message}"
             logger.error("Failed to load LibSqlDriver: ${e.message}", e)
@@ -104,29 +110,32 @@ object TursoDatabaseService {
         val resultList = mutableListOf<MasterDataDto>()
 
         return try {
-            val stmt = conn.createStatement()
-            val rs = stmt.executeQuery("SELECT * FROM MasterData;")
+            val sql = if (searchTerms.isEmpty()) {
+                "SELECT * FROM MasterData ORDER BY ROWID DESC LIMIT 100;"
+            } else {
+                val conditions = searchTerms.joinToString(" AND ") {
+                    "(LOWER(Code_2) LIKE ? OR LOWER(employee_name_3) LIKE ? OR personal_contact_number_14 LIKE ? OR contact_no_2_15 LIKE ? OR LOWER(branch_name_9) LIKE ? OR LOWER(designation_7) LIKE ?)"
+                }
+                "SELECT * FROM MasterData WHERE $conditions ORDER BY ROWID DESC LIMIT 100;"
+            }
 
-            while (rs.next()) {
-                val dto = StaffRepository.parseMasterDataDto(rs)
-                val searchableText = "${dto.empId} ${dto.employeeName} ${dto.personalContactNumber} ${dto.contactNo2} ${dto.branchName} ${dto.designation}".lowercase()
-
-                var isMatch = true
-                if (searchTerms.isNotEmpty()) {
-                    for (term in searchTerms) {
-                        if (!searchableText.contains(term)) {
-                            isMatch = false
-                            break
-                        }
+            val pstmt = conn.prepareStatement(sql)
+            var paramIndex = 1
+            if (searchTerms.isNotEmpty()) {
+                for (term in searchTerms) {
+                    val pattern = "%$term%"
+                    repeat(6) {
+                        pstmt.setString(paramIndex++, pattern)
                     }
                 }
+            }
 
-                if (isMatch) {
-                    resultList.add(dto)
-                }
+            val rs = pstmt.executeQuery()
+            while (rs.next()) {
+                resultList.add(StaffRepository.parseMasterDataDto(rs))
             }
             rs.close()
-            stmt.close()
+            pstmt.close()
             resultList
         } catch (e: Exception) {
             logger.error("Error searching records for query '$query': ${e.message}", e)
@@ -138,22 +147,52 @@ object TursoDatabaseService {
 
     fun getActiveStaffByBranch(branchQuery: String): List<MasterDataDto> {
         if (branchQuery.isBlank()) return emptyList()
-        val allRecords = searchRecords("") 
-        return allRecords.filter { dto ->
-            val isActive = calculateStatusScore(dto) > 1
-            val isBranchMatch = dto.branchName.trim().lowercase().contains(branchQuery.lowercase())
-            isActive && isBranchMatch
+        val conn = getConnection() ?: return emptyList()
+        val resultList = mutableListOf<MasterDataDto>()
+        try {
+            val sql = "SELECT * FROM MasterData WHERE LOWER(branch_name_9) LIKE ? LIMIT 200;"
+            val pstmt = conn.prepareStatement(sql)
+            pstmt.setString(1, "%${branchQuery.trim().lowercase()}%")
+            val rs = pstmt.executeQuery()
+            while (rs.next()) {
+                val dto = StaffRepository.parseMasterDataDto(rs)
+                if (calculateStatusScore(dto) > 1) {
+                    resultList.add(dto)
+                }
+            }
+            rs.close()
+            pstmt.close()
+        } catch (e: Exception) {
+            logger.error("Error fetching active staff by branch: ${e.message}", e)
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
         }
+        return resultList
     }
 
     fun getActiveStaffByDesignation(designationQuery: String): List<MasterDataDto> {
         if (designationQuery.isBlank()) return emptyList()
-        val allRecords = searchRecords("") 
-        return allRecords.filter { dto ->
-            val isActive = calculateStatusScore(dto) > 1
-            val isDesignationMatch = dto.designation.trim().lowercase().contains(designationQuery.lowercase())
-            isActive && isDesignationMatch
+        val conn = getConnection() ?: return emptyList()
+        val resultList = mutableListOf<MasterDataDto>()
+        try {
+            val sql = "SELECT * FROM MasterData WHERE LOWER(designation_7) LIKE ? LIMIT 200;"
+            val pstmt = conn.prepareStatement(sql)
+            pstmt.setString(1, "%${designationQuery.trim().lowercase()}%")
+            val rs = pstmt.executeQuery()
+            while (rs.next()) {
+                val dto = StaffRepository.parseMasterDataDto(rs)
+                if (calculateStatusScore(dto) > 1) {
+                    resultList.add(dto)
+                }
+            }
+            rs.close()
+            pstmt.close()
+        } catch (e: Exception) {
+            logger.error("Error fetching active staff by designation: ${e.message}", e)
+        } finally {
+            try { conn.close() } catch (_: Exception) {}
         }
+        return resultList
     }
 
     fun getLast20Records(): List<MasterDataDto> {
@@ -179,33 +218,8 @@ object TursoDatabaseService {
         }
     }
 
-    // ଛୋଟ ଏବଂ ସରଳ କରାଯାଇଥିବା Salary History Fetching
     fun getSalaryHistoryByEmpIdLast4(rawEmpId: String): List<SalaryDto> {
-        val conn = getConnection() ?: return emptyList()
-        val cleanEmpId = rawEmpId.trim()
-        if (cleanEmpId.length < 4) return emptyList()
-        val last4Digits = cleanEmpId.takeLast(4)
-
-        val resultList = mutableListOf<SalaryDto>()
-        try {
-            val stmt = conn.createStatement()
-            val rs = stmt.executeQuery("SELECT * FROM SalaryHistory;")
-            while (rs.next()) {
-                val dto = parseSalaryDto(rs)
-                val rowEmpCode = dto.empId2.trim()
-                if (rowEmpCode.isNotBlank() && rowEmpCode.endsWith(last4Digits)) {
-                    resultList.add(dto)
-                }
-            }
-            rs.close()
-            stmt.close()
-            return resultList.takeLast(20).reversed()
-        } catch (e: Exception) {
-            logger.error("Error fetching salary history: ${e.message}", e)
-            return emptyList()
-        } finally {
-            try { conn.close() } catch (_: Exception) {}
-        }
+        return getSalaryHistoryLast20(rawEmpId)
     }
 
     fun getSalaryHistoryLast20(rawEmpId: String): List<SalaryDto> {
