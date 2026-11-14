@@ -151,8 +151,9 @@ object ReportMeService {
         }
 
         // Helper: Head Office Department ku serial Rank (1..10) au last re Others (99) deba
-        fun getHeadOfficeDeptInfo(rawDept: String): Pair<Int, String> {
+        fun getHeadOfficeDeptInfo(rawDept: String, rawDesig: String): Pair<Int, String> {
             val d = rawDept.trim().lowercase()
+            val des = rawDesig.trim().lowercase()
             return when {
                 d.contains("manage") -> Pair(1, "Management")
                 d.contains("operat") -> Pair(2, "Operations")
@@ -162,7 +163,7 @@ object ReportMeService {
                 d.contains("audit") -> Pair(6, "Audit")
                 d.contains("credit") -> Pair(7, "Credit")
                 d.contains("train") -> Pair(8, "Training")
-                d.contains("tele") || d.contains("caller") -> Pair(9, "Telecaller")
+                d.contains("tele") || d.contains("caller") || des.contains("tele") || des.contains("caller") -> Pair(9, "Telecaller")
                 d.contains("admin") -> Pair(10, "Administration")
                 else -> Pair(99, rawDept.trim().ifBlank { "Others" })
             }
@@ -212,9 +213,10 @@ object ReportMeService {
 
                         val dto = rawDto.copy(salaryHistory = last24SalaryHistory)
 
-                        if (rawBranch.contains("head office", ignoreCase = true) || rawBranch.equals("ho", ignoreCase = true)) {
+                        val isTelecaller = dto.department.contains("tele", ignoreCase = true) || dto.designation.contains("tele", ignoreCase = true)
+                        if (rawBranch.contains("head office", ignoreCase = true) || rawBranch.equals("ho", ignoreCase = true) || isTelecaller) {
                             // 1g: Head Office staff ku Department anuyayi group kariba
-                            val deptKey = getHeadOfficeDeptInfo(dto.department)
+                            val deptKey = getHeadOfficeDeptInfo(dto.department, dto.designation)
                             groupedByHoDept.getOrPut(deptKey) { mutableListOf() }.add(dto)
                         } else {
                             // 1f: Field Branch staff
