@@ -155,6 +155,7 @@ object ReportMeService {
             val d = rawDept.trim().lowercase()
             val des = rawDesig.trim().lowercase()
             return when {
+                des.contains("telecaller") || des.contains("tele caller") || d.contains("tele") || d.contains("caller") -> Pair(9, "Telecaller")
                 d.contains("manage") -> Pair(1, "Management")
                 d.contains("operat") -> Pair(2, "Operations")
                 d.contains("human") || d == "hr" || d.contains("hr ") -> Pair(3, "Human Resource")
@@ -163,7 +164,6 @@ object ReportMeService {
                 d.contains("audit") -> Pair(6, "Audit")
                 d.contains("credit") -> Pair(7, "Credit")
                 d.contains("train") -> Pair(8, "Training")
-                d.contains("tele") || d.contains("caller") || des.contains("tele") || des.contains("caller") -> Pair(9, "Telecaller")
                 d.contains("admin") -> Pair(10, "Administration")
                 else -> Pair(99, rawDept.trim().ifBlank { "Others" })
             }
@@ -269,16 +269,14 @@ object ReportMeService {
                 )
             }
 
-        // 3b. 1g Final Head Office Department List (Sorted by department rank, then grouped by designation, then sorted by salary_code_47 ascending)
+        // 3b. 1g Final Head Office Department List (Sorted by department rank, staff sorted by salary_code_47 ascending, blank/zero at bottom)
         val finalHeadOfficeDeptList = groupedByHoDept.entries
             .sortedBy { it.key.first }
             .map { (deptPair, staffList) ->
-                val sortedStaffList = staffList.sortedWith(
-                    compareBy<MasterDataDto> { it.designation.trim().lowercase() }
-                        .thenBy { 
-                            it.salaryCode.replace(",", "").trim().toDoubleOrNull() ?: Double.MAX_VALUE 
-                        }
-                )
+                val sortedStaffList = staffList.sortedBy { staff ->
+                    val salCode = staff.salaryCode.replace(",", "").trim().toDoubleOrNull()
+                    if (salCode == null || salCode <= 0.0) Double.MAX_VALUE else salCode
+                }
 
                 HeadOfficeDeptReportItem(
                     departmentName = deptPair.second,
