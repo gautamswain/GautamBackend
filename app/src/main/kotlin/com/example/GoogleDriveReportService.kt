@@ -13,6 +13,14 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayInputStream
 
+@kotlinx.serialization.Serializable
+data class StaffDriveFileItem(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val size: String
+)
+
 object GoogleDriveReportService {
     private const val APPLICATION_NAME = "AdhikarHR Drive Service"
     private val logger = LoggerFactory.getLogger(GoogleDriveReportService::class.java)
@@ -69,7 +77,7 @@ object GoogleDriveReportService {
         }
     }
 
-    suspend fun listStaffFiles(empCode: String): List<Map<String, Any>> = withContext(Dispatchers.IO) {
+    suspend fun listStaffFiles(empCode: String): List<StaffDriveFileItem> = withContext(Dispatchers.IO) {
         try {
             val driveService = getDriveService()
             val folderId = resolveOrCreateStaffFolderId(driveService, empCode)
@@ -80,11 +88,11 @@ object GoogleDriveReportService {
                 .execute()
 
             result.files?.map { file ->
-                mapOf<String, Any>(
-                    "id" to (file.id ?: ""),
-                    "name" to (file.name ?: ""),
-                    "mimeType" to (file.mimeType ?: ""),
-                    "size" to (file.getSize() ?: 0L)
+                StaffDriveFileItem(
+                    id = file.id ?: "",
+                    name = file.name ?: "",
+                    mimeType = file.mimeType ?: "",
+                    size = file.getSize()?.toString() ?: "0"
                 )
             } ?: emptyList()
         } catch (e: Exception) {
