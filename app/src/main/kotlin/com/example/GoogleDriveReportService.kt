@@ -52,6 +52,83 @@ object GoogleDriveReportService {
         }
     }
 
+    private fun resolveOrCreateStaffFolderId(driveService: Drive, empCode: String): String {
+        val digits = empCode.replace(Regex("[^0-9]"), "").ifBlank { empCode }
+        val folderName = "FILE$digits"
+        val parentId = getOrCreateAdhikarHrFolder(driveService)
+
+        val query = "mimeType = 'application/vnd.google-apps.folder' and name = '$folderName' and '$parentId' in parents and trashed = false"
+        val folderResult = driveService.files().list().setQ(query).execute()
+        return folderResult.files.firstOrNull()?.id ?: run {
+            val folderMetadata = File().apply {
+                name = folderName
+                mimeType = "application/vnd.google-apps.folder"
+                parents = listOf(parentId)
+            }
+            driveService.files().create(folderMetadata).setFields("id").execute().id
+        }
+    }
+
+    suspend fun listStaffFiles(empCode: String): List<Map<String, Any>> = withContext(Dispatchers.IO) {
+        try {
+            val driveService = getDriveService()
+            val folderId = resolveOrCreateStaffFolderId(driveService, empCode)
+            val query = "'$folderId' in parents and trashed = false"
+            val result = driveService.files().list()
+                .setQ(query)
+                .setFields("files(id, name, mimeType, size)")
+                .execute()
+
+            result.files?.map { file ->
+                mapOf<String, Any>(
+                    "id" to (file.id ?: ""),
+                    "name" to (file.name ?: ""),
+                    "mimeType" to (file.mimeType ?: ""),
+                    "size" to (file.getSize() ?: 0L)
+                )
+            } ?: emptyList()
+        } catch (e: Exception) {
+            logger.error("Error in listStaffFiles for empCode $empCode: ${e.message}", e)
+            throw e
+        }
+    }
+
+    suspend fun uploadStaffFile(empCode: String, fileName: String, mimeType: String, bytes: ByteArray): Map<String, String> = withContext(Dispatchers.IO) {
+        try {
+            val driveService = getDriveService()
+            val folderId = resolveOrCreateStaffFolderId(driveService, empCode)
+
+            val fileMetadata = File().apply {
+                name = fileName
+                parents = listOf(folderId)
+            }
+            val contentStream = ByteArrayInputStream(bytes)
+            val mediaContent = InputStreamContent(mimeType, contentStream)
+
+            val uploadedFile = driveService.files().create(fileMetadata, mediaContent)
+                .setFields("id, name")
+                .execute()
+
+            mapOf("id" to (uploadedFile.id ?: ""), "name" to (uploadedFile.name ?: ""))
+        } catch (e: Exception) {
+            logger.error("Error in uploadStaffFile for empCode $empCode: ${e.message}", e)
+            throw e
+        }
+    }
+
+    suspend fun downloadStaffFile(fileId: String): Triple<String, String, ByteArray> = withContext(Dispatchers.IO) {
+        try {
+            val driveService = getDriveService()
+            val fileMeta = driveService.files().get(fileId).setFields("name, mimeType").execute()
+            val inputStream = driveService.files().get(fileId).executeMediaAsInputStream()
+            val bytes = inputStream.readBytes()
+            Triple(fileMeta.name ?: "download", fileMeta.mimeType ?: "application/octet-stream", bytes)
+        } catch (e: Exception) {
+            logger.error("Error in downloadStaffFile for fileId $fileId: ${e.message}", e)
+            throw e
+        }
+    }
+
     suspend fun uploadBranchSummaryReport(): String = withContext(Dispatchers.IO) {
         try {
             val summaryList = BranchSummaryService.getActiveBranchSummary { TursoDatabaseService.getConnection() }

@@ -4,8 +4,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
-import io.ktor.http.content.PartData
-import io.ktor.http.content.forEachPart
+import io.ktor.http.content.*
+import io.ktor.http.ContentDisposition
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
@@ -22,6 +22,7 @@ import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
@@ -302,6 +303,70 @@ fun Application.module() {
                     call.respond(HttpStatusCode.OK, mapOf("status" to "success", "fileName" to fileName))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
+            get("/staff-files/{empCode}") {
+                val empCode = call.parameters["empCode"]
+                if (empCode.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing empCode"))
+                    return@get
+                }
+                try {
+                    val files = GoogleDriveReportService.listStaffFiles(empCode)
+                    call.respond(files)
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+                }
+            }
+
+            post("/staff-files/{empCode}/upload") {
+                val empCode = call.parameters["empCode"]
+                if (empCode.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing empCode"))
+                    return@post
+                }
+                try {
+                    var fileName = "uploaded_file"
+                    var mimeType = "application/octet-stream"
+                    var fileBytes = byteArrayOf()
+
+                    call.receiveMultipart().forEachPart { part ->
+                        when (part) {
+                            is PartData.FileItem -> {
+                                fileName = part.originalFileName ?: "uploaded_file"
+                                mimeType = part.contentType?.toString() ?: "application/octet-stream"
+                                fileBytes = part.streamProvider().readBytes()
+                            }
+                            else -> {}
+                        }
+                        part.dispose()
+                    }
+
+                    if (fileBytes.isEmpty()) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "No file uploaded"))
+                        return@post
+                    }
+
+                    val result = GoogleDriveReportService.uploadStaffFile(empCode, fileName, mimeType, fileBytes)
+                    call.respond(HttpStatusCode.OK, result)
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Upload failed")))
+                }
+            }
+
+            get("/download/{fileId}") {
+                val fileId = call.parameters["fileId"]
+                if (fileId.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing fileId"))
+                    return@get
+                }
+                try {
+                    val (name, mimeType, bytes) = GoogleDriveReportService.downloadStaffFile(fileId)
+                    call.response.headers.append(HttpHeaders.ContentDisposition, ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, name).toString())
+                    call.respondBytes(bytes, ContentType.parse(mimeType))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Download failed")))
                 }
             }
         }
