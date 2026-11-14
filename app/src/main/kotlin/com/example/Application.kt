@@ -407,6 +407,17 @@ fun Application.module() {
             }
         }
 
+        // Multi-turn Conversational HR Assistant Route
+        post("/api/ai-assistant") {
+            try {
+                val req = call.receive<AiAssistantRequest>()
+                val res = GeminiService.generateAiAssistantResponse(req)
+                call.respond(res)
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, AiAssistantResponse(reply = "Error: ${e.localizedMessage ?: "Unknown error"}"))
+            }
+        }
+
         // 6. Add Event Route
         post("/api/add-event") {
             var date = ""; var event = ""; var type = 2
