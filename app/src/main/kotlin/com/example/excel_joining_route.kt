@@ -246,8 +246,8 @@ fun Route.newJoiningRouting() {
                         return formatter.formatCellValue(cell).trim()
                     }
 
-                    // Skip header row and process up to 100 rows
-                    for (row in sheet.drop(1).take(100)) {
+                    // Skip header row and process up to 10 rows
+                    for (row in sheet.drop(1).take(10)) {
                         val slNo = getCellString(row, 0)
                         val rawEmpName = getCellString(row, 1)
 

@@ -27,6 +27,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import org.slf4j.event.Level
+import com.example.routes.employeeRoutes
 import java.io.File
 import java.time.LocalDate
 
@@ -92,6 +93,7 @@ fun Application.module() {
         employeeVerificationRoute()
         commentsQueueRoute() 
         currentStaffReportRouting()
+        employeeRoutes()
 
         reportMeRouting { TursoDatabaseService.getConnection() }
         

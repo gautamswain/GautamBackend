@@ -266,15 +266,12 @@ fun Route.employeeVerificationRoute() {
                         params.add(cleanAccount)
                     }
                     if (contactNo.isNotBlank()) {
-                        conditions.add("(TRIM(personal_contact_number_14) IN (?, ?) OR TRIM(contact_no_2_15) IN (?, ?))")
+                        conditions.add("(TRIM(personal_contact_number_14) = ? OR TRIM(contact_no_2_15) = ?)")
                         params.add(contactNo.trim())
                         params.add(contactNo.trim())
-                        params.add(contactNo.trim())
-                        params.add(contactNo.trim())
-                    } else if (contactNo2.isNotBlank()) {
-                        conditions.add("(TRIM(personal_contact_number_14) IN (?, ?) OR TRIM(contact_no_2_15) IN (?, ?))")
-                        params.add(contactNo2.trim())
-                        params.add(contactNo2.trim())
+                    }
+                    if (contactNo2.isNotBlank()) {
+                        conditions.add("(TRIM(personal_contact_number_14) = ? OR TRIM(contact_no_2_15) = ?)")
                         params.add(contactNo2.trim())
                         params.add(contactNo2.trim())
                     }
