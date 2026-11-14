@@ -72,7 +72,7 @@ object ReportMeService {
 
     fun last_two_month_all_code(conn: Connection): List<String> {
         val uniqueCodes = mutableSetOf<String>()
-        val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC"
+        val query = "SELECT month, emp_id_2 FROM SalaryHistory ORDER BY rowid DESC LIMIT 3000"
 
         conn.createStatement().use { stmt ->
             val rs = stmt.executeQuery(query)

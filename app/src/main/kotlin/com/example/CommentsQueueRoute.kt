@@ -634,7 +634,7 @@ fun Route.commentsQueueRoute() {
                 val obj = Json.parseToJsonElement(jsonDetails).jsonObject
                 val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
                 val skipCols = setOf("id", "sl_no_1", "Code_2", "employee_name_3")
-                val updates = obj.filterKeys { it !in skipCols }
+                val updates = obj.filterKeys { it !in skipCols && it.matches(Regex("^[a-zA-Z0-9_]+$")) }
 
                 if (empCode.isNotBlank() && updates.isNotEmpty()) {
                     val setClause = updates.keys.joinToString(", ") { "$it = ?" }
