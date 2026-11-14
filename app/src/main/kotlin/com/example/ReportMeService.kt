@@ -269,15 +269,22 @@ object ReportMeService {
                 )
             }
 
-        // 3b. 1g Final Head Office Department List (Sorted 1..10 & 99)
+        // 3b. 1g Final Head Office Department List (Sorted by department rank, then grouped by designation, then sorted by salary_code_47 ascending)
         val finalHeadOfficeDeptList = groupedByHoDept.entries
             .sortedBy { it.key.first }
             .map { (deptPair, staffList) ->
+                val sortedStaffList = staffList.sortedWith(
+                    compareBy<MasterDataDto> { it.designation.trim().lowercase() }
+                        .thenBy { 
+                            it.salaryCode.replace(",", "").trim().toDoubleOrNull() ?: Double.MAX_VALUE 
+                        }
+                )
+
                 HeadOfficeDeptReportItem(
                     departmentName = deptPair.second,
                     deptRank = deptPair.first,
-                    totalStaffCount = staffList.size,
-                    staffList = staffList
+                    totalStaffCount = sortedStaffList.size,
+                    staffList = sortedStaffList
                 )
             }
 
