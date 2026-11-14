@@ -41,6 +41,30 @@ object TursoDatabaseService {
             } else {
                 initErrorLog = "INITIALIZED"
                 logger.info("Turso driver initialized with host: $cleanUrl")
+
+                getConnection()?.use { conn ->
+                    conn.createStatement().use { stmt ->
+                        stmt.execute("""
+                            CREATE TABLE IF NOT EXISTS ai_prompt_templates (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                category TEXT,
+                                sample_prompt TEXT,
+                                expected_behavior_or_template TEXT,
+                                updated_at TEXT
+                            );
+                        """.trimIndent())
+                        stmt.execute("""
+                            CREATE TABLE IF NOT EXISTS ai_interaction_logs (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                user_prompt TEXT,
+                                ai_reply TEXT,
+                                detected_intent TEXT,
+                                status TEXT,
+                                created_at TEXT
+                            );
+                        """.trimIndent())
+                    }
+                }
             }
         } catch (e: Exception) {
             initErrorLog = "Driver Load Error: ${e.message}"

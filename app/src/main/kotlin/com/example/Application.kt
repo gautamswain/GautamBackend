@@ -418,6 +418,71 @@ fun Application.module() {
             }
         }
 
+        // AI Assistant Admin & Training Endpoints
+        get("/api/ai-unrecognized") {
+            val conn = TursoDatabaseService.getConnection()
+            if (conn == null) {
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+                return@get
+            }
+            try {
+                val list = mutableListOf<Map<String, Any>>()
+                conn.createStatement().use { stmt ->
+                    val rs = stmt.executeQuery("SELECT id, user_prompt, ai_reply, detected_intent, status, created_at FROM ai_interaction_logs WHERE status = 'UNRECOGNIZED' ORDER BY id DESC LIMIT 50;")
+                    while (rs.next()) {
+                        list.add(
+                            mapOf(
+                                "id" to rs.getInt("id"),
+                                "user_prompt" to (rs.getString("user_prompt") ?: ""),
+                                "ai_reply" to (rs.getString("ai_reply") ?: ""),
+                                "detected_intent" to (rs.getString("detected_intent") ?: ""),
+                                "status" to (rs.getString("status") ?: ""),
+                                "created_at" to (rs.getString("created_at") ?: "")
+                            )
+                        )
+                    }
+                    rs.close()
+                }
+                conn.close()
+                call.respond(list)
+            } catch (e: Exception) {
+                try { conn.close() } catch (_: Exception) {}
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Unknown error")))
+            }
+        }
+
+        post("/api/ai-teach") {
+            try {
+                val req = call.receive<AiTeachRequest>()
+                val conn = TursoDatabaseService.getConnection()
+                if (conn == null) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+                    return@post
+                }
+
+                conn.use { c ->
+                    c.prepareStatement("INSERT INTO ai_prompt_templates (category, sample_prompt, expected_behavior_or_template, updated_at) VALUES (?, ?, ?, ?)").use { ps ->
+                        ps.setString(1, req.category)
+                        ps.setString(2, req.samplePrompt)
+                        ps.setString(3, req.expectedTemplate)
+                        ps.setString(4, java.time.LocalDateTime.now().toString())
+                        ps.executeUpdate()
+                    }
+
+                    if (req.logId != null) {
+                        c.prepareStatement("UPDATE ai_interaction_logs SET status = 'RESOLVED' WHERE id = ?").use { ps ->
+                            ps.setInt(1, req.logId)
+                            ps.executeUpdate()
+                        }
+                    }
+                }
+
+                call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Template learned and log resolved successfully"))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Teach failed")))
+            }
+        }
+
         // 6. Add Event Route
         post("/api/add-event") {
             var date = ""; var event = ""; var type = 2
