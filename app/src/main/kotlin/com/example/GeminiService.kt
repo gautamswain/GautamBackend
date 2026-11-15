@@ -55,7 +55,7 @@ object GeminiService {
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10_000
-            readTimeout = 25_000
+            readTimeout = 45_000 // Increased to 45 seconds to prevent Read timed out
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
             setRequestProperty("Accept", "application/json")
@@ -78,7 +78,8 @@ object GeminiService {
         if (apiKey.isBlank()) {
             return@withContext "Technical error: GEMINI_API_KEY is missing in Render Environment Variables."
         }
-        val models = listOf("gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash")
+        // Prioritize gemini-flash-latest first for lightning-fast 2s replies
+        val models = listOf("gemini-flash-latest", "gemini-3.8-flash")
         var lastError = "No response generated."
 
         for (model in models) {
@@ -105,6 +106,9 @@ object GeminiService {
                     putJsonObject("generationConfig") {
                         put("responseMimeType", "application/json")
                         put("temperature", 0.2)
+                        putJsonObject("thinkingConfig") {
+                            put("thinkingBudget", 0)
+                        }
                     }
                 }
 
