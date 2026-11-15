@@ -151,11 +151,12 @@ object ReportMeService {
         }
 
         // Helper: Head Office Department ku serial Rank (1..10) au last re Others (99) deba
-        fun getHeadOfficeDeptInfo(rawDept: String, rawDesig: String): Pair<Int, String> {
+        fun getHeadOfficeDeptInfo(rawDept: String, rawDesig: String, rawStatus: String): Pair<Int, String> {
             val d = rawDept.trim().lowercase()
             val des = rawDesig.trim().lowercase()
+            val stat = rawStatus.trim()
             return when {
-                des.contains("telecaller") || des.contains("tele caller") || d.contains("tele") || d.contains("caller") -> Pair(9, "Telecaller")
+                des.replace(" ", "").contains("telecaller", ignoreCase = true) || stat.startsWith("DTC", ignoreCase = true) || d.contains("tele") || d.contains("caller") -> Pair(9, "Telecaller")
                 d.contains("manage") -> Pair(1, "Management")
                 d.contains("operat") -> Pair(2, "Operations")
                 d.contains("human") || d == "hr" || d.contains("hr ") -> Pair(3, "Human Resource")
@@ -211,9 +212,8 @@ object ReportMeService {
                             .takeLast(24)
                             .joinToString("~")
 
-                        val isTelecaller = designation.contains("telecaller", ignoreCase = true) || 
-                                           designation.contains("tele caller", ignoreCase = true) || 
-                                           rawDto.department.contains("tele", ignoreCase = true)
+                        val isTelecaller = designation.replace(" ", "").contains("telecaller", ignoreCase = true) || 
+                                           rawDto.status.startsWith("DTC", ignoreCase = true)
 
                         val effectiveDept = if (isTelecaller) "Telecaller" else rawDto.department
                         val dto = rawDto.copy(salaryHistory = last24SalaryHistory, department = effectiveDept)
@@ -224,7 +224,7 @@ object ReportMeService {
 
                         if (isHoOrTelecaller) {
                             // 1g: Head Office staff ku Department anuyayi group kariba
-                            val deptKey = getHeadOfficeDeptInfo(dto.department, dto.designation)
+                            val deptKey = getHeadOfficeDeptInfo(dto.department, dto.designation, dto.status)
                             groupedByHoDept.getOrPut(deptKey) { mutableListOf() }.add(dto)
                         } else {
                             // 1f: Field Branch staff
