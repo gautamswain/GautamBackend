@@ -42,6 +42,10 @@ dependencies {
 
     // Official Google GenAI SDK
     implementation("com.google.genai:google-genai:1.0.0")
+    implementation("io.ktor:ktor-client-core:2.3.10")
+    implementation("io.ktor:ktor-client-cio:2.3.10")
+    implementation("io.ktor:ktor-client-content-negotiation:2.3.10")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.10")
 
     // 🚀 Public Turso/LibSQL JDBC Driver from Maven Central (No 401 Auth Error)
     implementation("com.dbeaver.jdbc:com.dbeaver.jdbc.driver.libsql:1.0.4")

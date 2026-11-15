@@ -1,11 +1,18 @@
 package com.example
 
-import com.google.genai.Client
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.seconds
 
@@ -47,33 +54,78 @@ data class AiTeachRequest(
 
 object GeminiService {
     private val logger = LoggerFactory.getLogger(GeminiService::class.java)
-    private val apiKey: String = System.getenv("GEMINI_API_KEY") ?: ""
+    private val apiKey: String = System.getenv("GEMINI_API_KEY")?.trim() ?: ""
 
-    private val client by lazy {
-        if (apiKey.isNotBlank()) {
-            Client.builder().apiKey(apiKey).build()
-        } else null
+    val httpClient = HttpClient(CIO) {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 25_000
+            connectTimeoutMillis = 15_000
+            socketTimeoutMillis = 25_000
+        }
+        install(ContentNegotiation) {
+            json(Json {
+                ignoreUnknownKeys = true
+                isLenient = true
+                coerceInputValues = true
+            })
+        }
     }
 
-    suspend fun generateText(prompt: String): String = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || client == null) {
+    suspend fun generateText(prompt: String, systemInstruction: String = ""): String = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
             return@withContext "Technical error: GEMINI_API_KEY environment variable is not configured."
         }
         try {
-            logger.info("Sending prompt to Gemini: {}", prompt)
+            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
             
-            // ✅ Updated to gemini-2.5-flash as requested
-            val response = client!!.models.generateContent("gemini-2.5-flash", prompt, null)
-            
-            response.text() ?: "No response generated."
+            val requestBody = buildJsonObject {
+                if (systemInstruction.isNotBlank()) {
+                    putJsonObject("systemInstruction") {
+                        putJsonObject("parts") {
+                            put("text", systemInstruction)
+                        }
+                    }
+                }
+                putJsonArray("contents") {
+                    addJsonObject {
+                        putJsonArray("parts") {
+                            addJsonObject {
+                                put("text", prompt)
+                            }
+                        }
+                    }
+                }
+                putJsonObject("generationConfig") {
+                    put("responseMimeType", "application/json")
+                }
+            }
+
+            val response = httpClient.post(endpoint) {
+                contentType(ContentType.Application.Json)
+                setBody(requestBody.toString())
+            }
+
+            val rawBody = response.bodyAsText()
+            if (!response.status.isSuccess()) {
+                return@withContext "Gemini API Error (${response.status.value}): $rawBody"
+            }
+
+            val jsonElement = Json.parseToJsonElement(rawBody)
+            // Safe extraction from candidates[0].content.parts[0].text
+            val textPart = jsonElement.jsonObject["candidates"]?.jsonArray?.getOrNull(0)
+                ?.jsonObject?.get("content")?.jsonObject
+                ?.get("parts")?.jsonArray?.getOrNull(0)
+                ?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
+
+            textPart ?: rawBody
         } catch (e: Exception) {
-            logger.error("Gemini call failed: ${e.message}", e)
-            "Technical error: ${e.message}"
+            logger.error("Gemini direct REST call failed: ${e.message}", e)
+            "Technical error: ${e.localizedMessage ?: e.message}"
         }
     }
 
     suspend fun processHrAssistant(request: AiAssistantRequest): AiAssistantResponse = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || client == null) {
+        if (apiKey.isBlank()) {
             return@withContext AiAssistantResponse(
                 reply = "Technical error: GEMINI_API_KEY environment variable is not configured."
             )
@@ -152,22 +204,36 @@ object GeminiService {
                 """.trimIndent()
 
                 val conversationPrompt = buildString {
-                    append("$systemInstruction\n\nConversation History:\n")
                     request.messages.forEach { turn ->
                         append("${turn.role.uppercase()}: ${turn.text}\n")
                     }
                     append("ASSISTANT:")
                 }
 
-                val rawResponse = generateText(conversationPrompt)
-                val cleanedJson = rawResponse
+                val rawResponseText = generateText(conversationPrompt, systemInstruction)
+                if (rawResponseText.startsWith("Technical error:") || rawResponseText.startsWith("Gemini API Error")) {
+                    return@withTimeout AiAssistantResponse(reply = rawResponseText)
+                }
+
+                val cleanedJson = rawResponseText
                     .removePrefix("```json")
                     .removePrefix("```")
                     .removeSuffix("```")
                     .trim()
 
-                val json = Json { ignoreUnknownKeys = true; isLenient = true }
-                val assistantResponse = json.decodeFromString<AiAssistantResponse>(cleanedJson)
+                val json = Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                    coerceInputValues = true
+                }
+
+                val assistantResponse = try {
+                    json.decodeFromString<AiAssistantResponse>(cleanedJson)
+                } catch (_: Exception) {
+                    // Safe JSON extraction fallback: if JSON parse fails, return raw text as reply instead of throwing/crashing
+                    logger.warn("Failed to parse Gemini JSON response, returning raw text: $cleanedJson")
+                    AiAssistantResponse(reply = cleanedJson)
+                }
 
                 val lowerReply = assistantResponse.reply.lowercase()
                 val isUnrecognized = lowerReply.contains("bujhiparili nahi") ||
