@@ -58,9 +58,9 @@ object GeminiService {
 
     val httpClient = HttpClient(CIO) {
         install(HttpTimeout) {
-            requestTimeoutMillis = 25_000
+            requestTimeoutMillis = 60_000
             connectTimeoutMillis = 15_000
-            socketTimeoutMillis = 25_000
+            socketTimeoutMillis = 60_000
         }
         install(ContentNegotiation) {
             json(Json {
@@ -97,6 +97,9 @@ object GeminiService {
                 }
                 putJsonObject("generationConfig") {
                     put("responseMimeType", "application/json")
+                    putJsonObject("thinkingConfig") {
+                        put("thinkingBudget", 0)
+                    }
                 }
             }
 
@@ -111,7 +114,6 @@ object GeminiService {
             }
 
             val jsonElement = Json.parseToJsonElement(rawBody)
-            // Safe extraction from candidates[0].content.parts[0].text
             val textPart = jsonElement.jsonObject["candidates"]?.jsonArray?.getOrNull(0)
                 ?.jsonObject?.get("content")?.jsonObject
                 ?.get("parts")?.jsonArray?.getOrNull(0)
@@ -133,7 +135,7 @@ object GeminiService {
 
         val lastUserMessage = request.messages.lastOrNull()?.text ?: ""
         try {
-            withTimeout(25.seconds) {
+            withTimeout(60.seconds) {
                 // Pre-fetch matching staff records using TursoDatabaseService.searchRecords (limited to 10)
                 val searchResults = try {
                     if (lastUserMessage.isNotBlank()) {
@@ -210,29 +212,36 @@ object GeminiService {
                     append("ASSISTANT:")
                 }
 
-                val rawResponseText = generateText(conversationPrompt, systemInstruction)
-                if (rawResponseText.startsWith("Technical error:") || rawResponseText.startsWith("Gemini API Error")) {
-                    return@withTimeout AiAssistantResponse(reply = rawResponseText)
-                }
+                // Maximum 2 iterations limit for loop protection & fast execution
+                var iterations = 0
+                var assistantResponse = AiAssistantResponse(reply = "Technical error: No valid response parsed.")
 
-                val cleanedJson = rawResponseText
-                    .removePrefix("```json")
-                    .removePrefix("```")
-                    .removeSuffix("```")
-                    .trim()
+                while (iterations < 2) {
+                    iterations++
+                    val rawResponseText = generateText(conversationPrompt, systemInstruction)
+                    if (rawResponseText.startsWith("Technical error:") || rawResponseText.startsWith("Gemini API Error")) {
+                        return@withTimeout AiAssistantResponse(reply = rawResponseText)
+                    }
 
-                val json = Json {
-                    ignoreUnknownKeys = true
-                    isLenient = true
-                    coerceInputValues = true
-                }
+                    val cleanedJson = rawResponseText
+                        .removePrefix("```json")
+                        .removePrefix("```")
+                        .removeSuffix("```")
+                        .trim()
 
-                val assistantResponse = try {
-                    json.decodeFromString<AiAssistantResponse>(cleanedJson)
-                } catch (_: Exception) {
-                    // Safe JSON extraction fallback: if JSON parse fails, return raw text as reply instead of throwing/crashing
-                    logger.warn("Failed to parse Gemini JSON response, returning raw text: $cleanedJson")
-                    AiAssistantResponse(reply = cleanedJson)
+                    try {
+                        val json = Json {
+                            ignoreUnknownKeys = true
+                            isLenient = true
+                            coerceInputValues = true
+                        }
+                        assistantResponse = json.decodeFromString<AiAssistantResponse>(cleanedJson)
+                        break
+                    } catch (_: Exception) {
+                        if (iterations >= 2) {
+                            assistantResponse = AiAssistantResponse(reply = cleanedJson)
+                        }
+                    }
                 }
 
                 val lowerReply = assistantResponse.reply.lowercase()
