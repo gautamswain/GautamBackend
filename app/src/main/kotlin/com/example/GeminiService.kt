@@ -61,8 +61,8 @@ object GeminiService {
         val url = URL(endpoint)
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 6_000
-            readTimeout = 10_000 // Maximum 10s wait per model so it never hangs
+            connectTimeout = 10_000
+            readTimeout = 22_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
             setRequestProperty("Accept", "application/json")
@@ -85,23 +85,27 @@ object GeminiService {
         if (apiKey.isBlank()) {
             return@withContext "ERROR_NO_KEY"
         }
-        val models = listOf("gemini-3.8-flash", "gemini-flash-lite-latest")
+        // Google's official current models: 3.5-flash-lite is ultra-fast & rarely 503s, 3.8-flash is primary
+        val models = listOf("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.8-flash")
         var lastError = "ERROR_API_FAIL"
 
-        for (model in models) {
+        for ((index, model) in models.withIndex()) {
             try {
                 val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
 
                 val requestBody = buildJsonObject {
                     if (systemInstruction.isNotBlank()) {
                         putJsonObject("systemInstruction") {
-                            putJsonObject("parts") {
-                                put("text", systemInstruction)
+                            putJsonArray("parts") {
+                                addJsonObject {
+                                    put("text", systemInstruction)
+                                }
                             }
                         }
                     }
                     putJsonArray("contents") {
                         addJsonObject {
+                            put("role", "user")
                             putJsonArray("parts") {
                                 addJsonObject {
                                     put("text", prompt)
@@ -111,28 +115,32 @@ object GeminiService {
                     }
                     putJsonObject("generationConfig") {
                         put("responseMimeType", "application/json")
-                        put("temperature", 0.2)
-                        putJsonObject("thinkingConfig") {
-                            put("thinkingBudget", 0)
-                        }
+                        put("temperature", 0.6)
                     }
                 }
 
                 val (statusCode, rawBody) = postJsonHttp(endpoint, requestBody.toString())
                 if (statusCode in 200..299) {
                     val jsonElement = jsonParser.parseToJsonElement(rawBody)
-                    val textPart = jsonElement.jsonObject["candidates"]?.jsonArray?.getOrNull(0)
+                    val partsArray = jsonElement.jsonObject["candidates"]?.jsonArray?.getOrNull(0)
                         ?.jsonObject?.get("content")?.jsonObject
-                        ?.get("parts")?.jsonArray?.getOrNull(0)
-                        ?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
+                        ?.get("parts")?.jsonArray
+
+                    // Extract the actual text part (skipping any internal thought part if present)
+                    val textPart = partsArray?.mapNotNull { part ->
+                        val obj = part.jsonObject
+                        if (obj["thought"]?.jsonPrimitive?.booleanOrNull == true) null
+                        else obj["text"]?.jsonPrimitive?.contentOrNull
+                    }?.lastOrNull()
 
                     if (!textPart.isNullOrBlank()) {
+                        logger.info("Gemini LLM success using model: $model")
                         return@withContext textPart
                     }
                 } else {
                     lastError = "ERROR_HTTP_$statusCode"
-                    logger.warn("Gemini API ($statusCode) [$model]:$rawBody")
-                    if (statusCode == 503) delay(800)
+                    logger.warn("Gemini API ($statusCode) [$model attempt ${index + 1}]:$rawBody")
+                    if (statusCode == 503 || statusCode == 429) delay(1200)
                 }
             } catch (e: Exception) {
                 lastError = "ERROR_EXCEPTION: ${e.message}"
@@ -176,7 +184,8 @@ object GeminiService {
             "salary", "branch", "designation", "joining", "date", "staff", "employee", "details", "info",
             "draft", "letter", "warning", "transfer", "notice", "absconding", "experience", "cause",
             "ka", "ra", "nka", "nkara", "kete", "kouthi", "achhanti", "achhi", "data", "diantu", "kahantu",
-            "please", "sir", "mobile", "number", "phone", "email", "department", "post", "keun", "kebe"
+            "please", "sir", "mobile", "number", "phone", "email", "department", "post", "keun", "kebe",
+            "head", "office", "adhikar", "ketoti", "kebala", "sabu", "list", "karantu", "lekha", "lekhantu"
         )
 
         val cleaned = message.replace(Regex("[^a-zA-Z0-9\\s]"), " ")
@@ -185,107 +194,33 @@ object GeminiService {
             .filter { it.length >= 3 && it.lowercase() !in stopWords }
             .distinct()
 
-        return if (words.isNotEmpty()) words.take(3) else listOf(message.trim())
+        return if (words.isNotEmpty()) words.take(4) else listOf(message.trim())
     }
 
-    // 100% Instant Local Smart Engine (Works in 0.5s even if Gemini API is 503 or Timed Out)
-    private fun buildInstantLocalResponse(userMessage: String, searchResults: List<MasterDataDto>): AiAssistantResponse {
-        val lowerMsg = userMessage.lowercase()
-
+    private fun buildEmergencyFallbackResponse(userMessage: String, searchResults: List<MasterDataDto>): AiAssistantResponse {
         if (searchResults.isEmpty()) {
             return AiAssistantResponse(
-                reply = "Ei naam ba EmpID re kounasi Active Staff (1a & 1b list re) milila nahi. Dayakari exact Name ki ADKR code (e.g. ADKR1146) lekhantu."
+                reply = "Khyama karibe, ehi naam ba EmpID re kounasi Active Staff (1a & 1b list re) milila nahi. Dayakari exact Name ki ADKR code lekhantu."
             )
         }
-
         if (searchResults.size > 1) {
-            val options = searchResults.map { "${it.employeeName} (${it.empId})" }
             return AiAssistantResponse(
                 reply = "Ei naam re ${searchResults.size} jana Active (1a/1b) staff milile. Dayakari tala option ru jananku select karantu:",
-                quickOptions = options
+                quickOptions = searchResults.map { "${it.employeeName} (${it.empId})" }
             )
         }
-
         val emp = searchResults.first()
         val sal = emp.a48.ifBlank { emp.salaryCode }.ifBlank { "N/A" }
-        val dept = emp.department.ifBlank { "N/A" }
-        val branch = emp.branchName.ifBlank { "N/A" }
-        val desig = emp.designation.ifBlank { "N/A" }
-        val doj = emp.dojInAdhikar.ifBlank { "N/A" }
-        val mob = emp.personalContactNumber.ifBlank { "N/A" }
-        val mail = emp.email61Personal.ifBlank { emp.mailIdOffice }.ifBlank { "hr@adhikarindia.org" }
-
-        // Check if user requested a letter draft
-        val wantsLetter = lowerMsg.contains("letter") || lowerMsg.contains("notice") ||
-                          lowerMsg.contains("warning") || lowerMsg.contains("show cause") ||
-                          lowerMsg.contains("absconding") || lowerMsg.contains("transfer") ||
-                          lowerMsg.contains("experience")
-
-        if (wantsLetter) {
-            val letterType = when {
-                lowerMsg.contains("abscond") -> "ABSCONDING_NOTICE"
-                lowerMsg.contains("show") || lowerMsg.contains("cause") -> "SHOW_CAUSE"
-                lowerMsg.contains("transfer") -> "TRANSFER"
-                lowerMsg.contains("experience") -> "EXPERIENCE"
-                else -> "WARNING"
-            }
-            val subject = "$letterType - ${emp.employeeName} (${emp.empId})"
-            val body = """
-                To,
-                ${emp.employeeName}
-                Emp ID: ${emp.empId}
-                Designation: $desig
-                Branch: $branch
-
-                Subject: $subject
-
-                Dear ${emp.employeeName},
-
-                This is an official $letterType issued from HR Department, Adhikar Microfinance Pvt. Ltd. regarding your service record at $branch branch. Please report to the HR Department immediately with your explanation.
-
-                Sincerely,
-                HR Department
-                Adhikar Microfinance
-            """.trimIndent()
-
-            return AiAssistantResponse(
-                reply = "${emp.employeeName} (${emp.empId}) nka pain$letterType prastuta kara jaichhi:",
-                letterDraft = HrLetterDraft(
-                    empId = emp.empId,
-                    employeeName = emp.employeeName,
-                    recipientEmail = mail,
-                    letterType = letterType,
-                    subject = subject,
-                    body = body
-                )
-            )
-        }
-
-        val summary = buildString {
-            append("✅ Active Staff (1a/1b) Details:\n")
-            append("• Name: ${emp.employeeName} (${emp.empId})\n")
-            append("• Designation: $desig\n")
-            append("• Department: $dept\n")
-            append("• Branch: $branch\n")
-            append("• Salary: ₹$sal\n")
-            append("• Joining Date: $doj\n")
-            append("• Mobile: $mob")
-        }
-
         return AiAssistantResponse(
-            reply = summary,
-            quickOptions = listOf(
-                "Draft Warning Letter ${emp.empId}",
-                "Draft Show Cause ${emp.empId}",
-                "Draft Transfer Letter ${emp.empId}"
-            )
+            reply = "${emp.employeeName} (${emp.empId}) वर्तमान ${emp.branchName} branch re ${emp.designation} (${emp.department}) bhabare kama karuchhanti. Tanka salary ₹$sal, joining date ${emp.dojInAdhikar}, o mobile number ${emp.personalContactNumber}.",
+            quickOptions = listOf("Draft Warning Letter ${emp.empId}", "Draft Show Cause ${emp.empId}")
         )
     }
 
     suspend fun processHrAssistant(request: AiAssistantRequest): AiAssistantResponse = withContext(Dispatchers.IO) {
         val lastUserMessage = request.messages.lastOrNull()?.text?.trim() ?: ""
         if (lastUserMessage.isBlank()) {
-            return@withContext AiAssistantResponse(reply = "Dayakari staff nka Name ba ADKR ID lekhantu.")
+            return@withContext AiAssistantResponse(reply = "Namaskar! Mu AdhikarHR AI Assistant. Apana kounasi Active staff nka bisayare pachariparibe ba HR letter draft kariparibe.")
         }
 
         val allowedActiveCodes = fetchAllowedActiveCodes()
@@ -303,44 +238,91 @@ object GeminiService {
             } catch (_: Exception) {}
         }
 
-        val searchResults = matchedMap.values.take(12).toList()
+        val searchResults = matchedMap.values.take(15).toList()
 
-        // Try Gemini with a strict 15-second total cap; if Gemini is slow/503, immediately return Local DB response!
-        val finalResponse = try {
-            withTimeout(15.seconds) {
-                val staffContext = if (searchResults.isNotEmpty()) {
-                    "\nVerified Active Staff (1a & 1b):\n" + searchResults.joinToString("\n") {
-                        "EmpId: ${it.empId} | Name: ${it.employeeName} | Branch: ${it.branchName} | Dept: ${it.department} | Desig: ${it.designation} | Joining: ${it.dojInAdhikar} | Salary(a48): ${it.a48.ifBlank { it.salaryCode }} | Mobile: ${it.personalContactNumber} | Email: ${it.email61Personal.ifBlank { it.mailIdOffice }}"
+        // Load learned templates from DB if any
+        val dynamicTemplates = mutableListOf<String>()
+        try {
+            TursoDatabaseService.getConnection()?.use { conn ->
+                conn.createStatement().use { stmt ->
+                    val rs = stmt.executeQuery("SELECT category, sample_prompt, expected_behavior_or_template FROM ai_prompt_templates")
+                    while (rs.next()) {
+                        val cat = rs.getString("category") ?: ""
+                        val prompt = rs.getString("sample_prompt") ?: ""
+                        val expected = rs.getString("expected_behavior_or_template") ?: ""
+                        dynamicTemplates.add("- [$cat] When asked '$prompt':$expected")
                     }
-                } else {
-                    "\nVerified Active Staff (1a & 1b): None found."
+                    rs.close()
                 }
+            }
+        } catch (_: Exception) {}
 
-                val systemInstruction = """
-                    You are AdhikarHR AI Assistant. Answer strictly using the Verified Active Staff (1a & 1b) data below.
-                    If multiple staff match, put "Full Name (EmpID)" in quickOptions.
-                    Reply in the user's language (Odia, Romanized Odia, or English).
-                    $staffContext
-                    Return ONLY JSON: {"reply": "...", "quickOptions": [], "letterDraft": null}
-                """.trimIndent()
+        val templatesSection = if (dynamicTemplates.isNotEmpty()) {
+            "\nCustom HR Rules/Templates:\n" + dynamicTemplates.joinToString("\n")
+        } else ""
 
-                val conversationPrompt = request.messages.takeLast(3).joinToString("\n") { "${it.role.uppercase()}:${it.text}" } + "\nASSISTANT:"
+        val staffContext = if (searchResults.isNotEmpty()) {
+            "\nVerified Active Staff Records (from 1a & 1b Active List):\n" + searchResults.joinToString("\n") {
+                "- EmpId: ${it.empId}, Name: ${it.employeeName}, Gender:${it.gender}, Designation: ${it.designation}, Dept:${it.department}, Branch: ${it.branchName}, JoiningDate:${it.dojInAdhikar}, Salary: ₹${it.a48.ifBlank { it.salaryCode }}, Mobile:${it.personalContactNumber}, Email: ${it.email61Personal.ifBlank { it.mailIdOffice }}, Father:${it.fathersName}, Qualification: ${it.highestEducationalQualification}, BloodGroup:${it.bloodGroup}"
+            }
+        } else {
+            "\nVerified Active Staff Records (1a & 1b): No active employee matched keywords $keywords."
+        }
+
+        val systemInstruction = """
+            You are AdhikarHR AI Assistant, an intelligent, warm, conversational HR colleague for Adhikar Microfinance Pvt. Ltd.
+            You speak natural Odia (in Odia script), Romanized Odia (Odia in English alphabet), and English—always reply in the exact language/script the user used.
+
+            HOW TO RESPOND LIKE A SMART LLM:
+            1. Answer the user's specific question naturally and conversationally instead of dumping a rigid bullet list.
+               - Example: If the user asks "Gautam nka salary kete?", reply naturally like: "Gautam Charan Swain (ADKR1146) nka current monthly salary ₹40,000 achhi. Se Head Office re Human Resources department re Assistant Manager bhabare achhanti."
+               - If the user asks for full details, explain them warmly and clearly.
+               - If the user greets you or asks a general HR question, chat naturally and helpfully.
+            2. STRICT 1a & 1b ACTIVE STAFF RULE:
+               - Only use employee facts from the "Verified Active Staff Records (from 1a & 1b Active List)" below.
+               - If the user asks about a specific employee who is NOT in the list below, politely inform them that this person is not in the current Active (1a & 1b) staff list.
+            3. DISAMBIGUATION:
+               - If multiple employees match the user's query (e.g., 3 people named Basanta) and the user hasn't specified which one, mention them naturally in `reply` and populate `quickOptions` with `["Full Name (EmpID)", ...]`.
+            4. HR LETTER DRAFTING:
+               - When asked to write/draft a Warning Letter, Show Cause Notice, Absconding Notice, Transfer Order, or Experience Certificate, write a polished, complete formal letter inside `letterDraft` (`letterType` = "WARNING", "SHOW_CAUSE", "ABSCONDING_NOTICE", "TRANSFER", or "EXPERIENCE") and explain it briefly in `reply`. Otherwise set `letterDraft` to `null`.
+            $staffContext$templatesSection
+
+            Return ONLY a valid JSON object matching this exact structure:
+            {
+              "reply": "Your natural, conversational LLM response here",
+              "quickOptions": ["Suggested follow-up 1", "Suggested follow-up 2"],
+              "letterDraft": null
+            }
+        """.trimIndent()
+
+        val conversationPrompt = buildString {
+            request.messages.takeLast(6).forEach { turn ->
+                append("${turn.role.uppercase()}:${turn.text}\n")
+            }
+            append("ASSISTANT:")
+        }
+
+        val finalResponse = try {
+            withTimeout(40.seconds) {
                 val rawResponseText = generateText(conversationPrompt, systemInstruction)
-
                 if (rawResponseText.startsWith("ERROR_")) {
-                    buildInstantLocalResponse(lastUserMessage, searchResults)
+                    buildEmergencyFallbackResponse(lastUserMessage, searchResults)
                 } else {
-                    val cleanedJson = rawResponseText.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                    val cleanedJson = rawResponseText
+                        .removePrefix("```json")
+                        .removePrefix("```")
+                        .removeSuffix("```")
+                        .trim()
                     try {
                         jsonParser.decodeFromString<AiAssistantResponse>(cleanedJson)
                     } catch (_: Exception) {
-                        buildInstantLocalResponse(lastUserMessage, searchResults)
+                        AiAssistantResponse(reply = cleanedJson)
                     }
                 }
             }
         } catch (e: Exception) {
-            logger.warn("Gemini timed out or failed (${e.message}), using instant local DB response.")
-            buildInstantLocalResponse(lastUserMessage, searchResults)
+            logger.warn("LLM call timed out, using fallback: ${e.message}")
+            buildEmergencyFallbackResponse(lastUserMessage, searchResults)
         }
 
         try {
