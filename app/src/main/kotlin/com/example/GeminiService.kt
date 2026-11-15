@@ -1,19 +1,13 @@
 package com.example
 
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.time.Duration.Companion.seconds
 
 @Serializable
@@ -56,18 +50,27 @@ object GeminiService {
     private val logger = LoggerFactory.getLogger(GeminiService::class.java)
     private val apiKey: String = System.getenv("GEMINI_API_KEY")?.trim() ?: ""
 
-    val httpClient = HttpClient(CIO) {
-        install(HttpTimeout) {
-            requestTimeoutMillis = 55_000
-            connectTimeoutMillis = 15_000
-            socketTimeoutMillis = 55_000
+    private fun postJsonHttp(endpoint: String, jsonBody: String): Pair<Int, String> {
+        val url = URL(endpoint)
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 10_000
+            readTimeout = 25_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            setRequestProperty("Accept", "application/json")
         }
-        install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                isLenient = true
-                coerceInputValues = true
-            })
+        return try {
+            conn.outputStream.use { os ->
+                os.write(jsonBody.toByteArray(Charsets.UTF_8))
+                os.flush()
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            Pair(code, text)
+        } finally {
+            conn.disconnect()
         }
     }
 
@@ -75,7 +78,6 @@ object GeminiService {
         if (apiKey.isBlank()) {
             return@withContext "Technical error: GEMINI_API_KEY is missing in Render Environment Variables."
         }
-        // Google API suggested model first, followed by automatic fallbacks
         val models = listOf("gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash")
         var lastError = "No response generated."
 
@@ -106,13 +108,8 @@ object GeminiService {
                     }
                 }
 
-                val response = httpClient.post(endpoint) {
-                    contentType(ContentType.Application.Json)
-                    setBody(requestBody.toString())
-                }
-
-                val rawBody = response.bodyAsText()
-                if (response.status.isSuccess()) {
+                val (statusCode, rawBody) = postJsonHttp(endpoint, requestBody.toString())
+                if (statusCode in 200..299) {
                     val jsonElement = Json.parseToJsonElement(rawBody)
                     val textPart = jsonElement.jsonObject["candidates"]?.jsonArray?.getOrNull(0)
                         ?.jsonObject?.get("content")?.jsonObject
@@ -123,7 +120,7 @@ object GeminiService {
                         return@withContext textPart
                     }
                 } else {
-                    lastError = "Gemini API Error (${response.status.value}) [$model]:$rawBody"
+                    lastError = "Gemini API Error ($statusCode) [$model]:$rawBody"
                     logger.warn(lastError)
                 }
             } catch (e: Exception) {
@@ -211,7 +208,7 @@ object GeminiService {
                     } else "Exact 1 active staff matched."
 
                     "\n\nVerified Active Staff (1a & 1b) [$disambiguationNote]:\n" + searchResults.joinToString("\n") {
-                        "EmpId: ${it.empId} | Name: ${it.employeeName} | Branch: ${it.branchName} | Dept: ${it.department} | Desig: ${it.designation} | Joining: ${it.dojInAdhikar} | Salary(a48): ${it.a48.ifBlank { it.salaryCode }} | Mobile: ${it.personalContactNumber} | Email: ${it.email61Personal.ifBlank { it.mailIdOffice }}"
+                        "EmpId: ${it.empId} | Name: ${it.employeeName} \vert{} Branch:${it.branchName} | Dept: ${it.department} \vert{} Desig:${it.designation} | Joining: ${it.dojInAdhikar} \vert{} Salary(a48):${it.a48.ifBlank { it.salaryCode }} | Mobile: ${it.mobile} \vert{} Email:${it.email}"
                     }
                 } else {
                     "\n\nVerified Active Staff (1a & 1b): No matching record found for keywords $keywords."
