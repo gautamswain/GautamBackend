@@ -97,6 +97,24 @@ fun Application.module() {
         employeeRoutes()
 
         reportMeRouting { TursoDatabaseService.getConnection() }
+
+        get("/api/run-reportme") {
+            val conn = TursoDatabaseService.getConnection()
+            if (conn == null) {
+                call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to "DB connection failed"))
+                return@get
+            }
+            try {
+                val result = conn.use { c -> ReportMeService.processAndSave(c) }
+                call.respond(HttpStatusCode.OK, mapOf(
+                    "status" to result.status,
+                    "totalHeadOfficeDepts" to result.totalHeadOfficeDeptCount,
+                    "totalBranches" to result.totalBranchwiseCount
+                ))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "error", "message" to (e.localizedMessage ?: "Error")))
+            }
+        }
         
         // SalaryRoutes.kt ର ବ୍ୟାଚ୍ ସାଲାରୀ ରୁଟ୍ ଏଠାରେ ରେଜିଷ୍ଟର୍ କରାଗଲା
         configureSalaryRoutes()
