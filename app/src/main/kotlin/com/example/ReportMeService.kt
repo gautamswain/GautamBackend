@@ -282,7 +282,7 @@ object ReportMeService {
             .sortedBy { it.key.first }
             .map { (deptPair, staffList) ->
                 val sortedStaffList = staffList.sortedBy { emp ->
-                    emp.salaryCode.replace(Regex("[^0-9.]"), "").toDoubleOrNull() ?: Double.MAX_VALUE
+                    emp.a48.replace(Regex("[^0-9.]"), "").toDoubleOrNull() ?: Double.MAX_VALUE
                 }
 
                 HeadOfficeDeptReportItem(

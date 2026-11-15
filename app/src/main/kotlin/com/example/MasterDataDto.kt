@@ -72,4 +72,9 @@ data class MasterDataDto(
     @SerialName("a65") val totalMonthOfWork: String = "",
     @SerialName("a66") val sameBranch: String = "",
     @SerialName("a67") val sameDesignation: String = ""
-)
+) {
+    val a8: String get() = designation
+    val a9: String get() = department
+    val a31: String get() = status
+    val a48: String get() = salaryCode
+}
