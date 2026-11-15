@@ -211,10 +211,18 @@ object ReportMeService {
                             .takeLast(24)
                             .joinToString("~")
 
-                        val dto = rawDto.copy(salaryHistory = last24SalaryHistory)
+                        val isTelecaller = designation.contains("telecaller", ignoreCase = true) || 
+                                           designation.contains("tele caller", ignoreCase = true) || 
+                                           rawDto.department.contains("tele", ignoreCase = true)
 
-                        val isTelecaller = dto.department.contains("tele", ignoreCase = true) || dto.designation.contains("tele", ignoreCase = true)
-                        if (rawBranch.contains("head office", ignoreCase = true) || rawBranch.equals("ho", ignoreCase = true) || isTelecaller) {
+                        val effectiveDept = if (isTelecaller) "Telecaller" else rawDto.department
+                        val dto = rawDto.copy(salaryHistory = last24SalaryHistory, department = effectiveDept)
+
+                        val isHoOrTelecaller = rawBranch.contains("head office", ignoreCase = true) || 
+                                                 rawBranch.equals("ho", ignoreCase = true) || 
+                                                 isTelecaller
+
+                        if (isHoOrTelecaller) {
                             // 1g: Head Office staff ku Department anuyayi group kariba
                             val deptKey = getHeadOfficeDeptInfo(dto.department, dto.designation)
                             groupedByHoDept.getOrPut(deptKey) { mutableListOf() }.add(dto)
@@ -269,13 +277,12 @@ object ReportMeService {
                 )
             }
 
-        // 3b. 1g Final Head Office Department List (Sorted by department rank, staff sorted by salary_code_47 ascending, blank/zero at bottom)
+        // 3b. 1g Final Head Office Department List (Sorted by department rank, staff sorted by numeric salary_code_47 ascending)
         val finalHeadOfficeDeptList = groupedByHoDept.entries
             .sortedBy { it.key.first }
             .map { (deptPair, staffList) ->
-                val sortedStaffList = staffList.sortedBy { staff ->
-                    val salCode = staff.salaryCode.replace(",", "").trim().toDoubleOrNull()
-                    if (salCode == null || salCode <= 0.0) Double.MAX_VALUE else salCode
+                val sortedStaffList = staffList.sortedBy { emp ->
+                    emp.salaryCode.replace(Regex("[^0-9.]"), "").toDoubleOrNull() ?: Double.MAX_VALUE
                 }
 
                 HeadOfficeDeptReportItem(

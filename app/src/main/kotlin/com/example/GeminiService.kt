@@ -62,8 +62,8 @@ object GeminiService {
         try {
             logger.info("Sending prompt to Gemini: {}", prompt)
             
-            // ✅ Fix: Updated to latest recommended model gemini-3.8-flash
-            val response = client!!.models.generateContent("gemini-3.8-flash", prompt, null)
+            // ✅ Updated to gemini-2.5-flash as requested
+            val response = client!!.models.generateContent("gemini-2.5-flash", prompt, null)
             
             response.text() ?: "No response generated."
         } catch (e: Exception) {
@@ -73,26 +73,31 @@ object GeminiService {
     }
 
     suspend fun processHrAssistant(request: AiAssistantRequest): AiAssistantResponse = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank() || client == null) {
+            return@withContext AiAssistantResponse(
+                reply = "Technical error: GEMINI_API_KEY environment variable is not configured."
+            )
+        }
+
         val lastUserMessage = request.messages.lastOrNull()?.text ?: ""
         try {
-            withTimeout(20.seconds) {
-                if (apiKey.isBlank() || client == null) {
-                    return@withTimeout AiAssistantResponse(
-                        reply = "Technical error: GEMINI_API_KEY environment variable is not configured."
-                    )
-                }
+            withTimeout(25.seconds) {
+                // Pre-fetch matching staff records using TursoDatabaseService.searchRecords (limited to 10)
+                val searchResults = try {
+                    if (lastUserMessage.isNotBlank()) {
+                        TursoDatabaseService.searchRecords(lastUserMessage).take(10)
+                    } else emptyList()
+                } catch (_: Exception) { emptyList() }
 
-                // 2. Limit matching records to .take(10)
-                val staffContext = if (lastUserMessage.isNotBlank()) {
-                    try {
-                        val results = TursoDatabaseService.searchRecords(lastUserMessage).take(10)
-                        if (results.isNotEmpty()) {
-                            "\n\nMatching Database Staff Records (Top 10):\n" + results.joinToString("\n") {
-                                "EmpId: ${it.empId}, Name: ${it.employeeName}, Branch: ${it.branchName}, Designation: ${it.designation}, Phone: ${it.personalContactNumber}"
-                            }
-                        } else ""
-                    } catch (_: Exception) { "" }
-                } else ""
+                val staffContext = if (searchResults.isNotEmpty()) {
+                    val disambiguationNote = if (searchResults.size > 1) {
+                        "\nNOTE: Multiple staff records matched (${searchResults.size} found). Please provide their full names and IDs in 'quickOptions' as 'Full Name (EmpID)' and ask the user to clarify."
+                    } else ""
+
+                    "\n\nMatching Database Staff Records ($disambiguationNote):\n" + searchResults.joinToString("\n") {
+                        "EmpId: ${it.empId}, Name: ${it.employeeName}, Branch: ${it.branchName}, Designation: ${it.designation}, JoiningDate: ${it.dojInAdhikar}, SalaryCode(47): ${it.salaryCode}"
+                    }
+                } else "\n\nMatching Database Staff Records: None found."
 
                 // Fetch dynamic templates from database
                 val dynamicTemplates = mutableListOf<String>()
@@ -121,18 +126,19 @@ object GeminiService {
                     You are AdhikarHR AI Assistant for Adhikar microfinance HR management system.
                     You understand Odia, Romanized Odia (Odia in English script), and English.
                     You help HR managers with:
-                    1. Employee queries & database lookup (staff details, branch, designation, salary).
-                    2. Disambiguation when multiple employees match a query.
+                    1. Employee queries & database lookup (staff details, branch, designation, joining date, salary).
+                    2. Disambiguation: If multiple employees match a query (e.g., multiple Madhabas), list them in `quickOptions` as ["Full Name (EmpID)", ...] and ask the user to select.
                     3. Salary update queueing & preview.
                     4. HR letter drafting (ABSCONDING_NOTICE, SHOW_CAUSE, WARNING, TRANSFER, EXPERIENCE).
                     $staffContext
                     $templatesInstruction
                     
-                    If the user query is completely unclear, unrecognized, or outside HR capabilities, set reply to explain you didn't understand and suggest options, and we will log it as UNRECOGNIZED.
+                    Respond directly, accurately, and fluently in the user's language (Odia, Romanized Odia, or English).
+                    If the user query is completely unclear or outside HR capabilities, set reply accordingly and log as UNRECOGNIZED.
                     
                     You MUST return your response as a valid JSON object matching this exact schema:
                     {
-                      "reply": "Conversational reply in the user's language (Odia/Romanized Odia/English)",
+                      "reply": "Conversational reply in the user's language",
                       "quickOptions": ["Option 1", "Option 2"],
                       "letterDraft": {
                         "empId": "ADKRXXXX",
@@ -145,37 +151,23 @@ object GeminiService {
                     }
                 """.trimIndent()
 
-                // 1. Maximum 2 iterations limit for loop protection
-                var iterations = 0
-                var assistantResponse = AiAssistantResponse(reply = "Technical error: No valid response parsed.")
-
-                while (iterations < 2) {
-                    iterations++
-                    val conversationPrompt = buildString {
-                        append("$systemInstruction\n\nConversation History:\n")
-                        request.messages.forEach { turn ->
-                            append("${turn.role.uppercase()}: ${turn.text}\n")
-                        }
-                        append("ASSISTANT:")
+                val conversationPrompt = buildString {
+                    append("$systemInstruction\n\nConversation History:\n")
+                    request.messages.forEach { turn ->
+                        append("${turn.role.uppercase()}: ${turn.text}\n")
                     }
-
-                    val rawResponse = generateText(conversationPrompt)
-                    val cleanedJson = rawResponse
-                        .removePrefix("```json")
-                        .removePrefix("```")
-                        .removeSuffix("```")
-                        .trim()
-
-                    try {
-                        val json = Json { ignoreUnknownKeys = true; isLenient = true }
-                        assistantResponse = json.decodeFromString<AiAssistantResponse>(cleanedJson)
-                        break
-                    } catch (parseEx: Exception) {
-                        if (iterations >= 2) {
-                            throw parseEx
-                        }
-                    }
+                    append("ASSISTANT:")
                 }
+
+                val rawResponse = generateText(conversationPrompt)
+                val cleanedJson = rawResponse
+                    .removePrefix("```json")
+                    .removePrefix("```")
+                    .removeSuffix("```")
+                    .trim()
+
+                val json = Json { ignoreUnknownKeys = true; isLenient = true }
+                val assistantResponse = json.decodeFromString<AiAssistantResponse>(cleanedJson)
 
                 val lowerReply = assistantResponse.reply.lowercase()
                 val isUnrecognized = lowerReply.contains("bujhiparili nahi") ||
