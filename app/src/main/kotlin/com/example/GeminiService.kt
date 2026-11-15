@@ -208,7 +208,7 @@ object GeminiService {
                     } else "Exact 1 active staff matched."
 
                     "\n\nVerified Active Staff (1a & 1b) [$disambiguationNote]:\n" + searchResults.joinToString("\n") {
-                        "EmpId: ${it.empId} | Name: ${it.employeeName} \vert{} Branch:${it.branchName} | Dept: ${it.department} \vert{} Desig:${it.designation} | Joining: ${it.dojInAdhikar} \vert{} Salary(a48):${it.a48.ifBlank { it.salaryCode }} | Mobile: ${it.mobile} \vert{} Email:${it.email}"
+                        "EmpId: ${it.empId} | Name: ${it.employeeName} | Branch: ${it.branchName} | Dept: ${it.department} | Desig: ${it.designation} | Joining: ${it.dojInAdhikar} | Salary(a48): ${it.a48.ifBlank { it.salaryCode }} | Mobile: ${it.personalContactNumber} | Email: ${it.email61Personal.ifBlank { it.mailIdOffice }}"
                     }
                 } else {
                     "\n\nVerified Active Staff (1a & 1b): No matching record found for keywords $keywords."
