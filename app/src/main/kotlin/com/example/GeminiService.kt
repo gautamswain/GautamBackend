@@ -2,8 +2,8 @@ package com.example
 
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -18,7 +18,7 @@ import kotlin.time.Duration.Companion.seconds
 
 @Serializable
 data class AiChatTurn(
-    val role: String, // "user" or "model"
+    val role: String,
     val text: String
 )
 
@@ -32,7 +32,7 @@ data class HrLetterDraft(
     val empId: String,
     val employeeName: String,
     val recipientEmail: String,
-    val letterType: String, // "ABSCONDING_NOTICE", "SHOW_CAUSE", "WARNING", "TRANSFER", "EXPERIENCE"
+    val letterType: String,
     val subject: String,
     val body: String
 )
@@ -58,9 +58,9 @@ object GeminiService {
 
     val httpClient = HttpClient(CIO) {
         install(HttpTimeout) {
-            requestTimeoutMillis = 60_000
+            requestTimeoutMillis = 55_000
             connectTimeoutMillis = 15_000
-            socketTimeoutMillis = 60_000
+            socketTimeoutMillis = 55_000
         }
         install(ContentNegotiation) {
             json(Json {
@@ -73,9 +73,10 @@ object GeminiService {
 
     suspend fun generateText(prompt: String, systemInstruction: String = ""): String = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) {
-            return@withContext "Technical error: GEMINI_API_KEY environment variable is not configured."
+            return@withContext "Technical error: GEMINI_API_KEY is missing in Render Environment Variables."
         }
-        val models = listOf("gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest")
+        // Google API suggested model first, followed by automatic fallbacks
+        val models = listOf("gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash")
         var lastError = "No response generated."
 
         for (model in models) {
@@ -101,9 +102,7 @@ object GeminiService {
                     }
                     putJsonObject("generationConfig") {
                         put("responseMimeType", "application/json")
-                        putJsonObject("thinkingConfig") {
-                            put("thinkingBudget", 0)
-                        }
+                        put("temperature", 0.2)
                     }
                 }
 
@@ -124,11 +123,11 @@ object GeminiService {
                         return@withContext textPart
                     }
                 } else {
-                    lastError = "Gemini API Error (${response.status.value}) for model $model: $rawBody"
+                    lastError = "Gemini API Error (${response.status.value}) [$model]:$rawBody"
                     logger.warn(lastError)
                 }
             } catch (e: Exception) {
-                lastError = "Technical error for model $model: ${e.localizedMessage ?: e.message}"
+                lastError = "Technical error [$model]:${e.localizedMessage ?: e.message}"
                 logger.warn(lastError)
             }
         }
@@ -145,154 +144,128 @@ object GeminiService {
                         val jsonA = rs.getString("a") ?: "[]"
                         val jsonB = rs.getString("b") ?: "[]"
 
-                        val listA = Json.decodeFromString<List<String>>(jsonA)
-                        val listB = Json.decodeFromString<List<String>>(jsonB)
+                        val listA = Json.decodeFromString<List<String>>(jsonA).map { it.trim().uppercase() }.filter { it.isNotBlank() }
+                        val listB = Json.decodeFromString<List<String>>(jsonB).map { it.trim().uppercase() }.filter { it.isNotBlank() }
 
-                        listA.forEach { if (it.isNotBlank()) allowed.add(it.trim().uppercase()) }
-                        listB.forEach { if (it.isNotBlank()) allowed.add(it.trim().uppercase()) }
+                        allowed.addAll(listA)
+                        allowed.addAll(listB)
                     }
                     rs.close()
                 }
             }
         } catch (e: Exception) {
-            logger.error("Failed to fetch 1a & 1b reports for allowed active codes: ${e.message}")
+            logger.error("Failed to fetch 1a & 1b reports: ${e.message}")
         }
         return allowed
+    }
+
+    private fun extractKeywords(message: String): List<String> {
+        val stopWords = setOf(
+            "what", "is", "the", "of", "for", "in", "to", "a", "an", "tell", "me", "about", "show", "give",
+            "salary", "branch", "designation", "joining", "date", "staff", "employee", "details", "info",
+            "draft", "letter", "warning", "transfer", "notice", "absconding", "experience", "cause",
+            "ka", "ra", "kete", "kouthi", "achhanti", "achhi", "data", "diantu", "kahantu", "please", "sir"
+        )
+        val empCodeMatch = Regex("ADKR\\d+", RegexOption.IGNORE_CASE).find(message)?.value
+        if (!empCodeMatch.isNullOrBlank()) return listOf(empCodeMatch.uppercase())
+
+        val cleaned = message.replace(Regex("[^a-zA-Z0-9\\s]"), " ")
+        val words = cleaned.split(Regex("\\s+"))
+            .map { it.trim() }
+            .filter { it.length >= 3 && it.lowercase() !in stopWords }
+            .distinct()
+
+        return if (words.isNotEmpty()) words.take(3) else listOf(message.trim())
     }
 
     suspend fun processHrAssistant(request: AiAssistantRequest): AiAssistantResponse = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) {
             return@withContext AiAssistantResponse(
-                reply = "Technical error: GEMINI_API_KEY environment variable is not configured."
+                reply = "Technical error: GEMINI_API_KEY is not configured in Render."
             )
         }
 
         val lastUserMessage = request.messages.lastOrNull()?.text ?: ""
         try {
-            withTimeout(60.seconds) {
-                // 1. Strict 1a & 1b Active Staff Filter
+            withTimeout(55.seconds) {
                 val allowedActiveCodes = fetchAllowedActiveCodes()
+                val keywords = extractKeywords(lastUserMessage)
 
-                val searchResults = try {
-                    if (lastUserMessage.isNotBlank()) {
-                        TursoDatabaseService.searchRecords(lastUserMessage)
+                val matchedMap = linkedMapOf<String, MasterDataDto>()
+                for (kw in keywords) {
+                    if (kw.isBlank()) continue
+                    try {
+                        TursoDatabaseService.searchRecords(kw)
                             .filter { it.empId.trim().uppercase() in allowedActiveCodes }
-                            .take(10)
-                    } else emptyList()
-                } catch (_: Exception) { emptyList() }
+                            .forEach { emp ->
+                                matchedMap[emp.empId.trim().uppercase()] = emp
+                            }
+                    } catch (_: Exception) {}
+                }
+
+                val searchResults = matchedMap.values.take(12)
 
                 val staffContext = if (searchResults.isNotEmpty()) {
                     val disambiguationNote = if (searchResults.size > 1) {
-                        "\nNOTE: Multiple active staff records matched (${searchResults.size} found). Please provide their full names and IDs in 'quickOptions' as 'Full Name (EmpID)' and ask the user to clarify."
-                    } else ""
+                        "Multiple active staff matched (${searchResults.size}). If user asked about a specific person, list 'Full Name (EmpID)' in quickOptions."
+                    } else "Exact 1 active staff matched."
 
-                    "\n\nMatching Active Database Staff Records ($disambiguationNote):\n" + searchResults.joinToString("\n") {
-                        "EmpId: ${it.empId}, Name: ${it.employeeName}, Branch: ${it.branchName}, Designation: ${it.designation}, JoiningDate: ${it.dojInAdhikar}, SalaryCode(47): ${it.salaryCode}"
+                    "\n\nVerified Active Staff (1a & 1b) [$disambiguationNote]:\n" + searchResults.joinToString("\n") {
+                        "EmpId: ${it.empId} | Name: ${it.employeeName} | Branch: ${it.branchName} | Dept: ${it.department} | Desig: ${it.designation} | Joining: ${it.dojInAdhikar} | Salary(a48): ${it.a48.ifBlank { it.salaryCode }} | Mobile: ${it.personalContactNumber} | Email: ${it.email61Personal.ifBlank { it.mailIdOffice }}"
                     }
-                } else "\n\nMatching Active Database Staff Records: None found in active 1a/1b list."
-
-                // Fetch dynamic templates from database
-                val dynamicTemplates = mutableListOf<String>()
-                try {
-                    TursoDatabaseService.getConnection()?.use { conn ->
-                        conn.createStatement().use { stmt ->
-                            val rs = stmt.executeQuery("SELECT category, sample_prompt, expected_behavior_or_template FROM ai_prompt_templates")
-                            while (rs.next()) {
-                                val cat = rs.getString("category") ?: ""
-                                val prompt = rs.getString("sample_prompt") ?: ""
-                                val expected = rs.getString("expected_behavior_or_template") ?: ""
-                                dynamicTemplates.add("Category: $cat | Example Prompt: $prompt | Expected Template/Rule: $expected")
-                            }
-                            rs.close()
-                        }
-                    }
-                } catch (e: Exception) {
-                    logger.error("Failed to load ai_prompt_templates: ${e.message}")
+                } else {
+                    "\n\nVerified Active Staff (1a & 1b): No matching record found for keywords $keywords."
                 }
 
-                val templatesInstruction = if (dynamicTemplates.isNotEmpty()) {
-                    "\n\nLearned Dynamic Templates & Rules from DB:\n" + dynamicTemplates.joinToString("\n")
-                } else ""
-
                 val systemInstruction = """
-                    You are AdhikarHR AI Assistant for Adhikar microfinance HR management system.
-                    You understand Odia, Romanized Odia (Odia in English script), and English.
-                    You help HR managers with:
-                    1. Employee queries & database lookup (staff details, branch, designation, joining date, salary).
-                    2. Disambiguation: If multiple employees match a query (e.g., multiple Madhabas), list them in `quickOptions` as ["Full Name (EmpID)", ...] and ask the user to select.
-                    3. Salary update queueing & preview.
-                    4. HR letter drafting (ABSCONDING_NOTICE, SHOW_CAUSE, WARNING, TRANSFER, EXPERIENCE).
+                    You are AdhikarHR AI Assistant for Adhikar Microfinance.
+                    You understand Odia, Romanized Odia (Odia in English letters), and English.
+                    
+                    STRICT RULES:
+                    1. Answer ONLY using the Verified Active Staff (1a & 1b) data provided below. Never invent names, salaries, or dates.
+                    2. If no matching record is found in the 1a & 1b list, clearly tell the user in their language that this person is not in the Active (1a/1b) staff list.
+                    3. If multiple active employees match a name, list them in `quickOptions` as ["Full Name (EmpID)", ...] and ask the user to choose one.
+                    4. If asked to draft a letter (ABSCONDING_NOTICE, SHOW_CAUSE, WARNING, TRANSFER, EXPERIENCE), fill `letterDraft` completely. Otherwise keep `letterDraft` null.
+                    5. Reply in the exact same language the user used (Odia script, Romanized Odia, or English).
                     $staffContext
-                    $templatesInstruction
                     
-                    CRITICAL RULE: You only have access to Active Staff verified in 1a & 1b reports. If a staff member is not in this active list, clearly inform the user that they are not in the active 1a/1b staff list.
-                    
-                    Respond directly, accurately, and fluently in the user's language (Odia, Romanized Odia, or English).
-                    If the user query is completely unclear or outside HR capabilities, set reply accordingly and log as UNRECOGNIZED.
-                    
-                    You MUST return your response as a valid JSON object matching this exact schema:
+                    Return ONLY valid JSON matching this schema:
                     {
-                      "reply": "Conversational reply in the user's language",
-                      "quickOptions": ["Option 1", "Option 2"],
-                      "letterDraft": {
-                        "empId": "ADKRXXXX",
-                        "employeeName": "Name",
-                        "recipientEmail": "email@example.com",
-                        "letterType": "ABSCONDING_NOTICE",
-                        "subject": "Subject line",
-                        "body": "Drafted letter content..."
-                      }
+                      "reply": "Your direct helpful answer",
+                      "quickOptions": [],
+                      "letterDraft": null
                     }
                 """.trimIndent()
 
                 val conversationPrompt = buildString {
-                    request.messages.forEach { turn ->
-                        append("${turn.role.uppercase()}: ${turn.text}\n")
+                    request.messages.takeLast(4).forEach { turn ->
+                        append("${turn.role.uppercase()}:${turn.text}\n")
                     }
                     append("ASSISTANT:")
                 }
 
-                // Maximum 2 iterations limit for loop protection & fast execution
-                var iterations = 0
-                var assistantResponse = AiAssistantResponse(reply = "Technical error: No valid response parsed.")
-
-                while (iterations < 2) {
-                    iterations++
-                    val rawResponseText = generateText(conversationPrompt, systemInstruction)
-                    if (rawResponseText.startsWith("Technical error:") || rawResponseText.startsWith("Gemini API Error")) {
-                        return@withTimeout AiAssistantResponse(reply = rawResponseText)
-                    }
-
-                    val cleanedJson = rawResponseText
-                        .removePrefix("```json")
-                        .removePrefix("```")
-                        .removeSuffix("```")
-                        .trim()
-
-                    try {
-                        val json = Json {
-                            ignoreUnknownKeys = true
-                            isLenient = true
-                            coerceInputValues = true
-                        }
-                        assistantResponse = json.decodeFromString<AiAssistantResponse>(cleanedJson)
-                        break
-                    } catch (_: Exception) {
-                        if (iterations >= 2) {
-                            assistantResponse = AiAssistantResponse(reply = cleanedJson)
-                        }
-                    }
+                val rawResponseText = generateText(conversationPrompt, systemInstruction)
+                if (rawResponseText.startsWith("Technical error:") || rawResponseText.startsWith("Gemini API Error")) {
+                    return@withTimeout AiAssistantResponse(reply = rawResponseText)
                 }
 
-                val lowerReply = assistantResponse.reply.lowercase()
-                val isUnrecognized = lowerReply.contains("bujhiparili nahi") ||
-                                     lowerReply.contains("did not understand") ||
-                                     lowerReply.contains("unknown") ||
-                                     lowerReply.contains("unrecognized") ||
-                                     lowerReply.contains("maf karantu")
+                val cleanedJson = rawResponseText
+                    .removePrefix("```json")
+                    .removePrefix("```")
+                    .removeSuffix("```")
+                    .trim()
 
-                val status = if (isUnrecognized) "UNRECOGNIZED" else "SUCCESS"
-                val detectedIntent = assistantResponse.letterDraft?.letterType ?: if (assistantResponse.quickOptions.isNotEmpty()) "QUERY_WITH_OPTIONS" else "GENERAL_CHAT"
+                val jsonParser = Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                    coerceInputValues = true
+                }
+
+                val assistantResponse = try {
+                    jsonParser.decodeFromString<AiAssistantResponse>(cleanedJson)
+                } catch (_: Exception) {
+                    AiAssistantResponse(reply = cleanedJson)
+                }
 
                 try {
                     TursoDatabaseService.getConnection()?.use { conn ->
@@ -300,37 +273,19 @@ object GeminiService {
                         conn.prepareStatement(sql).use { ps ->
                             ps.setString(1, lastUserMessage)
                             ps.setString(2, assistantResponse.reply)
-                            ps.setString(3, detectedIntent)
-                            ps.setString(4, status)
+                            ps.setString(3, assistantResponse.letterDraft?.letterType ?: "GENERAL_CHAT")
+                            ps.setString(4, "SUCCESS")
                             ps.setString(5, java.time.LocalDateTime.now().toString())
                             ps.executeUpdate()
                         }
                     }
-                } catch (logEx: Exception) {
-                    logger.error("Failed to log ai interaction: ${logEx.message}")
-                }
+                } catch (_: Exception) {}
 
                 assistantResponse
             }
         } catch (e: Exception) {
             logger.error("ProcessHrAssistant failed: ${e.message}", e)
-            val errorReply = "Technical error: ${e.localizedMessage ?: e.message ?: "Unknown error"}"
-
-            try {
-                TursoDatabaseService.getConnection()?.use { conn ->
-                    val sql = "INSERT INTO ai_interaction_logs (user_prompt, ai_reply, detected_intent, status, created_at) VALUES (?, ?, ?, ?, ?);"
-                    conn.prepareStatement(sql).use { ps ->
-                        ps.setString(1, lastUserMessage)
-                        ps.setString(2, errorReply)
-                        ps.setString(3, "ERROR")
-                        ps.setString(4, "UNRECOGNIZED")
-                        ps.setString(5, java.time.LocalDateTime.now().toString())
-                        ps.executeUpdate()
-                    }
-                }
-            } catch (_: Exception) {}
-
-            AiAssistantResponse(reply = errorReply)
+            AiAssistantResponse(reply = "Technical error: ${e.localizedMessage ?: e.message ?: "Request failed"}")
         }
     }
 
