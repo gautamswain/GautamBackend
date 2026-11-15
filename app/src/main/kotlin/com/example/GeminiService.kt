@@ -1,6 +1,7 @@
 package com.example
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
@@ -8,6 +9,7 @@ import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 @Serializable
@@ -54,8 +56,8 @@ object GeminiService {
         val url = URL(endpoint)
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 10_000
-            readTimeout = 45_000 // Increased to 45 seconds to prevent Read timed out
+            connectTimeout = 8_000
+            readTimeout = 15_000 // Fast 15-second read timeout
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
             setRequestProperty("Accept", "application/json")
@@ -78,8 +80,7 @@ object GeminiService {
         if (apiKey.isBlank()) {
             return@withContext "Technical error: GEMINI_API_KEY is missing in Render Environment Variables."
         }
-        // Prioritize gemini-flash-latest first for lightning-fast 2s replies
-        val models = listOf("gemini-flash-latest", "gemini-3.8-flash")
+        val models = listOf("gemini-3.8-flash", "gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-pro-latest")
         var lastError = "No response generated."
 
         for (model in models) {
@@ -113,6 +114,11 @@ object GeminiService {
                 }
 
                 val (statusCode, rawBody) = postJsonHttp(endpoint, requestBody.toString())
+                if (statusCode == 503) {
+                    logger.warn("Gemini 503 Service Unavailable for model $model. Retrying after 1.2s...")
+                    delay(1200.milliseconds)
+                }
+
                 if (statusCode in 200..299) {
                     val jsonElement = Json.parseToJsonElement(rawBody)
                     val textPart = jsonElement.jsonObject["candidates"]?.jsonArray?.getOrNull(0)
@@ -247,7 +253,28 @@ object GeminiService {
 
                 val rawResponseText = generateText(conversationPrompt, systemInstruction)
                 if (rawResponseText.startsWith("Technical error:") || rawResponseText.startsWith("Gemini API Error")) {
-                    return@withTimeout AiAssistantResponse(reply = rawResponseText)
+                    // Instant Local Database Fallback
+                    return@withTimeout when {
+                        searchResults.size == 1 -> {
+                            val emp = searchResults.first()
+                            val sal = emp.a48.ifBlank { emp.salaryCode }
+                            AiAssistantResponse(
+                                reply = "✅ Active Staff (1a/1b) Details:\n• Name: ${emp.employeeName} (${emp.empId})\n• Designation: ${emp.designation}\n• Department: ${emp.department}\n• Branch: ${emp.branchName}\n• Joining Date: ${emp.dojInAdhikar}\n• Salary: ₹$sal\n• Mobile: ${emp.personalContactNumber}"
+                            )
+                        }
+                        searchResults.size > 1 -> {
+                            val options = searchResults.map { "${it.employeeName} (${it.empId})" }
+                            AiAssistantResponse(
+                                reply = "Multiple active (1a/1b) staff found (${searchResults.size}). Dayakari tala option ru jananku select karantu:",
+                                quickOptions = options
+                            )
+                        }
+                        else -> {
+                            AiAssistantResponse(
+                                reply = "Ei naam ba EmpID re kounasi Active Staff (1a & 1b list re) milila nahi. Dayakari exact Name ki ADKR code lekhantu."
+                            )
+                        }
+                    }
                 }
 
                 val cleanedJson = rawResponseText
