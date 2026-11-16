@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Adhikar Official Letter</title>
+    <style>
+        @page {
+            size: A4 portrait;
+            margin: 0;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            width: 210mm;
+            height: 297mm;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 11px;
+            color: #111111;
+            background-image: url("data:image/jpeg;base64,{{bgBase64}}");
+            background-size: 210mm 297mm;
+            background-repeat: no-repeat;
+            /* ଉପରୁ 38mm, ଡାହାଣରୁ 15mm, ତଳୁ 34mm ଓ ବାମରୁ 15mm ଛାଡ଼ି ଚିଠି ଲେଖାହେବ */
+            padding: 38mm 15mm 34mm 15mm;
+        }
+        .meta-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+            font-weight: bold;
+            font-size: 10.5px;
+        }
+        .letter-body p {
+            margin-bottom: 9px;
+            line-height: 1.5;
+            text-align: justify;
+        }
+        .letter-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 8px 0;
+        }
+        .letter-body th, .letter-body td {
+            border: 1px solid #222222;
+            padding: 5px 7px;
+            font-size: 10.5px;
+        }
+    </style>
+</head>
+<body>
+    <table class="meta-table">
+        <tr>
+            <td style="text-align:left;">Ref No: {{refNo}}</td>
+            <td style="text-align:right;">Date: {{date}}</td>
+        </tr>
+    </table>
+
+    <div class="letter-body">
+        {{formattedHtmlBody}}
+    </div>
+</body>
+</html>

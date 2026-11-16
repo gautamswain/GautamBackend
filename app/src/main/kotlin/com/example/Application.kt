@@ -78,6 +78,8 @@ fun Application.module() {
     val refreshToken = System.getenv("GOOGLE_REFRESH_TOKEN") ?: ""
     val driveService = GoogleDriveService(clientId, clientSecret, refreshToken)
 
+    configureRouting()
+
     routing {
         // HTML ପେଜ୍ ସିଧାସଳଖ ସର୍ଭରରୁ ଲୋଡ୍ ହେବ
         get("/") {
