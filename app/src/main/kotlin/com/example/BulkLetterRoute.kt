@@ -33,18 +33,24 @@ data class GenerateLetterRequest(
 
 @Serializable
 data class LetterEmailItem(
-    val id: Long,
-    val code: String,
-    val lettercode: String,
-    val tomail: String,
-    val ccmail: String,
-    val subject: String,
-    val body: String,
-    val attachmentlink: String,
-    val wef: String,
-    val status: String,
-    val sentdate: String?
+    val id: Long = 0L,
+    val code: String = "",
+    val lettercode: String = "",
+    val tomail: String = "",
+    val ccmail: String = "",
+    val subject: String = "",
+    val body: String = "",
+    val attachmentlink: String = "",
+    val wef: String = "",
+    val status: String = "PENDING",
+    val sentdate: String? = null
 )
+
+private val lenientJson = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+    coerceInputValues = true
+}
 
 data class MasterEmployeeData(
     val name: String,           // {1}
@@ -473,10 +479,10 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
         try {
             val text = call.receiveText()
             val rows = try {
-                Json.decodeFromString<List<BulkLetterRow>>(text)
+                lenientJson.decodeFromString<List<BulkLetterRow>>(text)
             } catch (_: Exception) {
                 try {
-                    Json.decodeFromString<GenerateLetterRequest>(text).rows
+                    lenientJson.decodeFromString<GenerateLetterRequest>(text).rows
                 } catch (e: Exception) {
                     emptyList()
                 }
@@ -656,13 +662,20 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
     }
 
     // POST /api/turso/sendletteremails
-    get("/api/turso/sendletteremails") { // Also support GET for testing or frontend convenience if needed, but primary is POST
-        // Handled below
-    }
-
     post("/api/turso/sendletteremails") {
         try {
-            val items = call.receive<List<LetterEmailItem>>()
+            val text = call.receiveText()
+            val items = try {
+                lenientJson.decodeFromString<List<LetterEmailItem>>(text)
+            } catch (_: Exception) {
+                try {
+                    val single = lenientJson.decodeFromString<LetterEmailItem>(text)
+                    listOf(single)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            }
+
             var sentCount = 0
             var failedCount = 0
 
