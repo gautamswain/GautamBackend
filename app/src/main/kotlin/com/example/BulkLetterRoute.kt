@@ -46,6 +46,13 @@ data class LetterEmailItem(
     val sentdate: String? = null
 )
 
+@Serializable
+data class SendEmailsResponse(
+    val sent: Int,
+    val failed: Int,
+    val errors: List<String> = emptyList()
+)
+
 private val lenientJson = Json {
     ignoreUnknownKeys = true
     isLenient = true
@@ -424,6 +431,25 @@ object BulkLetterService {
         pdfBytes: ByteArray?,
         pdfName: String
     ) {
+        try {
+            Thread.currentThread().contextClassLoader = BulkLetterService::class.java.classLoader
+            val mc = jakarta.activation.CommandMap.getDefaultCommandMap() as? jakarta.activation.MailcapCommandMap
+            if (mc != null) {
+                mc.addMailcap("text/html;; x-java-content-handler=com.sun.mail.handlers.text_html")
+                mc.addMailcap("text/plain;; x-java-content-handler=com.sun.mail.handlers.text_plain")
+                mc.addMailcap("application/pdf;; x-java-content-handler=com.sun.mail.handlers.application_pdf")
+                mc.addMailcap("multipart/*;; x-java-content-handler=com.sun.mail.handlers.multipart_mixed")
+                jakarta.activation.CommandMap.setDefaultCommandMap(mc)
+            } else {
+                val newMc = jakarta.activation.MailcapCommandMap()
+                newMc.addMailcap("text/html;; x-java-content-handler=com.sun.mail.handlers.text_html")
+                newMc.addMailcap("text/plain;; x-java-content-handler=com.sun.mail.handlers.text_plain")
+                newMc.addMailcap("application/pdf;; x-java-content-handler=com.sun.mail.handlers.application_pdf")
+                newMc.addMailcap("multipart/*;; x-java-content-handler=com.sun.mail.handlers.multipart_mixed")
+                jakarta.activation.CommandMap.setDefaultCommandMap(newMc)
+            }
+        } catch (_: Exception) {}
+
         val host = System.getenv("SMTP_HOST")?.trim()?.ifBlank { "smtp.gmail.com" } ?: "smtp.gmail.com"
         val port = System.getenv("SMTP_PORT")?.trim()?.ifBlank { "587" } ?: "587"
         val user = System.getenv("SMTP_USER")?.trim() ?: System.getenv("SMTP_EMAIL")?.trim() ?: ""
@@ -663,6 +689,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
     // POST /api/turso/sendletteremails
     post("/api/turso/sendletteremails") {
+        val errorList = mutableListOf<String>()
         try {
             val text = call.receiveText()
             val items = try {
@@ -696,7 +723,9 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                                     val (name, _, bytes) = GoogleDriveReportService.downloadStaffFile(fileId)
                                     pdfBytes = bytes
                                     if (name.isNotBlank()) pdfName = name
-                                } catch (_: Exception) {}
+                                } catch (driveEx: Exception) {
+                                    errorList.add("Drive download failed for ${item.code}: ${driveEx.message}")
+                                }
                             }
                         }
 
@@ -722,14 +751,19 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                     } catch (e: Exception) {
                         e.printStackTrace()
                         failedCount++
+                        errorList.add("Email send failed for ${item.code}: ${e.localizedMessage ?: e.message}")
                     }
                 }
             }
 
-            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "sentCount" to sentCount, "failedCount" to failedCount))
+            val statusCode = if (sentCount == 0 && failedCount > 0) HttpStatusCode.InternalServerError else HttpStatusCode.OK
+            call.respond(statusCode, SendEmailsResponse(sent = sentCount, failed = failedCount, errors = errorList))
         } catch (e: Exception) {
             e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to send emails")))
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                SendEmailsResponse(sent = 0, failed = 1, errors = listOf(e.localizedMessage ?: e.message ?: "Unknown error"))
+            )
         }
     }
 }
