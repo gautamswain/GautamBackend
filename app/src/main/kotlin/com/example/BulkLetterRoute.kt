@@ -5,9 +5,14 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.request.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import java.io.ByteArrayOutputStream
 import java.sql.Connection
 import java.time.LocalDate
@@ -423,6 +428,84 @@ object BulkLetterService {
         }
     }
 
+    suspend fun sendEmailWithBrevoApi(
+        to: String,
+        cc: String,
+        subject: String,
+        htmlBody: String,
+        pdfBytes: ByteArray?,
+        pdfName: String
+    ): Boolean {
+        val apiKey = System.getenv("BREVO_API_KEY")?.trim()
+            ?: System.getenv("SMTP_PASSWORD")?.trim()
+            ?: System.getenv("SMTP_PASS")?.trim()
+            ?: ""
+
+        if (apiKey.isBlank()) return false
+
+        val senderEmail = System.getenv("SMTP_USER")?.trim()
+            ?: System.getenv("SMTP_EMAIL")?.trim()
+            ?: "hr@adhikarindia.org"
+
+        val toList = to.split(",").map { it.trim() }.filter { it.contains("@") }
+        val ccList = cc.split(",").map { it.trim() }.filter { it.contains("@") }
+
+        if (toList.isEmpty()) return false
+
+        val jsonObj = buildJsonObject {
+            put("sender", buildJsonObject {
+                put("name", "Adhikar HR")
+                put("email", senderEmail)
+            })
+            put("to", buildJsonArray {
+                toList.forEach { email ->
+                    add(buildJsonObject { put("email", email) })
+                }
+            })
+            if (ccList.isNotEmpty()) {
+                put("cc", buildJsonArray {
+                    ccList.forEach { email ->
+                        add(buildJsonObject { put("email", email) })
+                    }
+                })
+            }
+            put("subject", subject)
+            put("htmlContent", htmlBody)
+
+            if (pdfBytes != null && pdfBytes.isNotEmpty()) {
+                val base64Pdf = java.util.Base64.getEncoder().encodeToString(pdfBytes)
+                put("attachment", buildJsonArray {
+                    add(buildJsonObject {
+                        put("content", base64Pdf)
+                        put("name", pdfName.ifBlank { "letter.pdf" })
+                    })
+                })
+            }
+        }
+
+        val endpoint = "https://api.brevo.com/v3/smtp/email"
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) {
+                json(lenientJson)
+            }
+        }
+
+        try {
+            val response = client.post(endpoint) {
+                contentType(ContentType.Application.Json)
+                header("api-key", apiKey)
+                header("accept", "application/json")
+                setBody(jsonObj.toString())
+            }
+            return response.status.isSuccess()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        } finally {
+            client.close()
+        }
+    }
+
     fun sendEmailWithJakartaMail(
         to: String,
         cc: String,
@@ -729,7 +812,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             }
                         }
 
-                        BulkLetterService.sendEmailWithJakartaMail(
+                        val sentViaBrevo = BulkLetterService.sendEmailWithBrevoApi(
                             to = item.tomail,
                             cc = item.ccmail,
                             subject = item.subject,
@@ -737,6 +820,17 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             pdfBytes = pdfBytes,
                             pdfName = pdfName
                         )
+
+                        if (!sentViaBrevo) {
+                            BulkLetterService.sendEmailWithJakartaMail(
+                                to = item.tomail,
+                                cc = item.ccmail,
+                                subject = item.subject,
+                                htmlBody = item.body,
+                                pdfBytes = pdfBytes,
+                                pdfName = pdfName
+                            )
+                        }
 
                         val istZone = ZoneId.of("Asia/Kolkata")
                         val sentTimestamp = java.time.LocalDateTime.now(istZone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
