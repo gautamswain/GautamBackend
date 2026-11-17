@@ -5,13 +5,9 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.io.ByteArrayOutputStream
 import java.sql.Connection
@@ -56,6 +52,22 @@ data class SendEmailsResponse(
     val sent: Int,
     val failed: Int,
     val errors: List<String> = emptyList()
+)
+
+@Serializable
+data class BrevoAddress(val email: String, val name: String? = null)
+
+@Serializable
+data class BrevoAttachment(val name: String, val content: String)
+
+@Serializable
+data class BrevoEmailRequest(
+    val sender: BrevoAddress,
+    val to: List<BrevoAddress>,
+    val cc: List<BrevoAddress>? = null,
+    val subject: String,
+    val htmlContent: String,
+    val attachment: List<BrevoAttachment>? = null
 )
 
 private val lenientJson = Json {
@@ -428,84 +440,6 @@ object BulkLetterService {
         }
     }
 
-    suspend fun sendEmailWithBrevoApi(
-        to: String,
-        cc: String,
-        subject: String,
-        htmlBody: String,
-        pdfBytes: ByteArray?,
-        pdfName: String
-    ): Boolean {
-        val apiKey = System.getenv("BREVO_API_KEY")?.trim()
-            ?: System.getenv("SMTP_PASSWORD")?.trim()
-            ?: System.getenv("SMTP_PASS")?.trim()
-            ?: ""
-
-        if (apiKey.isBlank()) return false
-
-        val senderEmail = System.getenv("SMTP_USER")?.trim()
-            ?: System.getenv("SMTP_EMAIL")?.trim()
-            ?: "hr@adhikarindia.org"
-
-        val toList = to.split(",").map { it.trim() }.filter { it.contains("@") }
-        val ccList = cc.split(",").map { it.trim() }.filter { it.contains("@") }
-
-        if (toList.isEmpty()) return false
-
-        val jsonObj = buildJsonObject {
-            put("sender", buildJsonObject {
-                put("name", "Adhikar HR")
-                put("email", senderEmail)
-            })
-            put("to", buildJsonArray {
-                toList.forEach { email ->
-                    add(buildJsonObject { put("email", email) })
-                }
-            })
-            if (ccList.isNotEmpty()) {
-                put("cc", buildJsonArray {
-                    ccList.forEach { email ->
-                        add(buildJsonObject { put("email", email) })
-                    }
-                })
-            }
-            put("subject", subject)
-            put("htmlContent", htmlBody)
-
-            if (pdfBytes != null && pdfBytes.isNotEmpty()) {
-                val base64Pdf = java.util.Base64.getEncoder().encodeToString(pdfBytes)
-                put("attachment", buildJsonArray {
-                    add(buildJsonObject {
-                        put("content", base64Pdf)
-                        put("name", pdfName.ifBlank { "letter.pdf" })
-                    })
-                })
-            }
-        }
-
-        val endpoint = "https://api.brevo.com/v3/smtp/email"
-        val client = HttpClient(CIO) {
-            install(ContentNegotiation) {
-                json(lenientJson)
-            }
-        }
-
-        try {
-            val response = client.post(endpoint) {
-                contentType(ContentType.Application.Json)
-                header("api-key", apiKey)
-                header("accept", "application/json")
-                setBody(jsonObj.toString())
-            }
-            return response.status.isSuccess()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return false
-        } finally {
-            client.close()
-        }
-    }
-
     fun sendEmailWithJakartaMail(
         to: String,
         cc: String,
@@ -514,72 +448,67 @@ object BulkLetterService {
         pdfBytes: ByteArray?,
         pdfName: String
     ) {
-        try {
-            Thread.currentThread().contextClassLoader = BulkLetterService::class.java.classLoader
-            val mc = jakarta.activation.CommandMap.getDefaultCommandMap() as? jakarta.activation.MailcapCommandMap
-            if (mc != null) {
-                mc.addMailcap("text/html;; x-java-content-handler=com.sun.mail.handlers.text_html")
-                mc.addMailcap("text/plain;; x-java-content-handler=com.sun.mail.handlers.text_plain")
-                mc.addMailcap("application/pdf;; x-java-content-handler=com.sun.mail.handlers.application_pdf")
-                mc.addMailcap("multipart/*;; x-java-content-handler=com.sun.mail.handlers.multipart_mixed")
-                jakarta.activation.CommandMap.setDefaultCommandMap(mc)
-            } else {
-                val newMc = jakarta.activation.MailcapCommandMap()
-                newMc.addMailcap("text/html;; x-java-content-handler=com.sun.mail.handlers.text_html")
-                newMc.addMailcap("text/plain;; x-java-content-handler=com.sun.mail.handlers.text_plain")
-                newMc.addMailcap("application/pdf;; x-java-content-handler=com.sun.mail.handlers.application_pdf")
-                newMc.addMailcap("multipart/*;; x-java-content-handler=com.sun.mail.handlers.multipart_mixed")
-                jakarta.activation.CommandMap.setDefaultCommandMap(newMc)
-            }
-        } catch (_: Exception) {}
+        val brevoApiKey = System.getenv("BREVO_API_KEY")?.trim().takeIf { !it.isNullOrBlank() }
+            ?: System.getenv("SMTP_PASS")?.trim().takeIf { !it.isNullOrBlank() && it.startsWith("xkeysib-", ignoreCase = true) }
+            ?: System.getenv("SMTP_PASSWORD")?.trim().takeIf { !it.isNullOrBlank() && it.startsWith("xkeysib-", ignoreCase = true) }
+            ?: throw IllegalStateException("Missing BREVO_API_KEY (xkeysib-...) in Render environment variables")
 
-        val host = System.getenv("SMTP_HOST")?.trim()?.ifBlank { "smtp.gmail.com" } ?: "smtp.gmail.com"
-        val port = System.getenv("SMTP_PORT")?.trim()?.ifBlank { "587" } ?: "587"
-        val user = System.getenv("SMTP_USER")?.trim() ?: System.getenv("SMTP_EMAIL")?.trim() ?: ""
-        val pass = System.getenv("SMTP_PASSWORD")?.trim() ?: System.getenv("SMTP_PASS")?.trim() ?: ""
+        val senderEmail = System.getenv("SMTP_FROM")?.trim().takeIf { !it.isNullOrBlank() }
+            ?: System.getenv("SMTP_USER")?.trim().takeIf { !it.isNullOrBlank() }
+            ?: System.getenv("SMTP_EMAIL")?.trim().takeIf { !it.isNullOrBlank() }
+            ?: "hr@adhikarindia.org"
 
-        val props = java.util.Properties().apply {
-            put("mail.smtp.auth", "true")
-            put("mail.smtp.starttls.enable", "true")
-            put("mail.smtp.host", host)
-            put("mail.smtp.port", port)
+        fun parseAddresses(raw: String): List<BrevoAddress> {
+            if (raw.isBlank()) return emptyList()
+            return raw.split(Regex("[,;]"))
+                .map { it.trim() }
+                .filter { it.contains("@") }
+                .map { BrevoAddress(email = it) }
         }
 
-        val session = if (user.isNotBlank() && pass.isNotBlank()) {
-            jakarta.mail.Session.getInstance(props, object : jakarta.mail.Authenticator() {
-                override fun getPasswordAuthentication() = jakarta.mail.PasswordAuthentication(user, pass)
-            })
+        val toList = parseAddresses(to)
+        if (toList.isEmpty()) {
+            throw IllegalArgumentException("No valid 'to' recipient email found")
+        }
+        val ccList = parseAddresses(cc).ifEmpty { null }
+
+        val attachmentList = if (pdfBytes != null && pdfBytes.isNotEmpty()) {
+            val base64Pdf = java.util.Base64.getEncoder().encodeToString(pdfBytes)
+            listOf(BrevoAttachment(name = pdfName.ifBlank { "letter.pdf" }, content = base64Pdf))
         } else {
-            jakarta.mail.Session.getInstance(props)
+            null
         }
 
-        val message = jakarta.mail.internet.MimeMessage(session).apply {
-            setFrom(jakarta.mail.internet.InternetAddress(user.ifBlank { "hr@adhikarindia.org" }))
-            if (to.isNotBlank()) {
-                setRecipients(jakarta.mail.Message.RecipientType.TO, jakarta.mail.internet.InternetAddress.parse(to))
-            }
-            if (cc.isNotBlank()) {
-                setRecipients(jakarta.mail.Message.RecipientType.CC, jakarta.mail.internet.InternetAddress.parse(cc))
-            }
-            setSubject(subject)
+        val emailRequest = BrevoEmailRequest(
+            sender = BrevoAddress(email = senderEmail, name = "Adhikar HR"),
+            to = toList,
+            cc = ccList,
+            subject = subject,
+            htmlContent = htmlBody,
+            attachment = attachmentList
+        )
 
-            val multipart = jakarta.mail.internet.MimeMultipart()
-            val textBodyPart = jakarta.mail.internet.MimeBodyPart().apply {
-                setContent(htmlBody, "text/html; charset=utf-8")
-            }
-            multipart.addBodyPart(textBodyPart)
+        val jsonPayload = Json.encodeToString(emailRequest)
+        val endpoint = "https://api.brevo.com/v3/smtp/email"
 
-            if (pdfBytes != null && pdfBytes.isNotEmpty()) {
-                val attachPart = jakarta.mail.internet.MimeBodyPart().apply {
-                    setDataHandler(jakarta.activation.DataHandler(jakarta.mail.util.ByteArrayDataSource(pdfBytes, "application/pdf")))
-                    fileName = pdfName.ifBlank { "letter.pdf" }
-                }
-                multipart.addBodyPart(attachPart)
-            }
-            setContent(multipart)
+        val client = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofSeconds(15))
+            .build()
+
+        val request = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create(endpoint))
+            .header("api-key", brevoApiKey)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonPayload, Charsets.UTF_8))
+            .build()
+
+        val response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString(Charsets.UTF_8))
+        println("Brevo response: ${response.statusCode()} - ${response.body()}")
+
+        if (response.statusCode() !in 200..299) {
+            throw RuntimeException("Brevo API error ${response.statusCode()}: ${response.body()}")
         }
-
-        jakarta.mail.Transport.send(message)
     }
 }
 
@@ -812,7 +741,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             }
                         }
 
-                        val sentViaBrevo = BulkLetterService.sendEmailWithBrevoApi(
+                        BulkLetterService.sendEmailWithJakartaMail(
                             to = item.tomail,
                             cc = item.ccmail,
                             subject = item.subject,
@@ -820,17 +749,6 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             pdfBytes = pdfBytes,
                             pdfName = pdfName
                         )
-
-                        if (!sentViaBrevo) {
-                            BulkLetterService.sendEmailWithJakartaMail(
-                                to = item.tomail,
-                                cc = item.ccmail,
-                                subject = item.subject,
-                                htmlBody = item.body,
-                                pdfBytes = pdfBytes,
-                                pdfName = pdfName
-                            )
-                        }
 
                         val istZone = ZoneId.of("Asia/Kolkata")
                         val sentTimestamp = java.time.LocalDateTime.now(istZone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
