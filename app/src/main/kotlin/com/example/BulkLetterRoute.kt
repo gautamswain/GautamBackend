@@ -273,33 +273,78 @@ object BulkLetterService {
 
     fun resolveEmailField(conn: Connection, rawToken: String, emp: MasterEmployeeData): String {
         val tokens = rawToken.split(",").map { it.trim() }.filter { it.isNotBlank() }
-        val resolved = mutableListOf<String>()
+        val resolved = mutableSetOf<String>()
         for (token in tokens) {
             if (token.equals("own", ignoreCase = true)) {
-                if (emp.email.isNotBlank()) resolved.add(emp.email)
+                val sql = "SELECT mail_id_office, email61_personal, personal_email FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
+                try {
+                    conn.prepareStatement(sql).use { ps ->
+                        ps.setString(1, emp.code)
+                        ps.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                val office = (rs.getString("mail_id_office") ?: "").trim()
+                                val personal1 = (rs.getString("email61_personal") ?: "").trim()
+                                val personal2 = (rs.getString("personal_email") ?: "").trim()
+                                if (office.isNotBlank() && office.contains("@")) resolved.add(office)
+                                if (personal1.isNotBlank() && personal1.contains("@")) resolved.add(personal1)
+                                if (personal2.isNotBlank() && personal2.contains("@")) resolved.add(personal2)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+                if (emp.email.isNotBlank() && emp.email.contains("@")) resolved.add(emp.email)
+            } else if (token.equals("pipe", ignoreCase = true)) {
+                if (emp.branch.isNotBlank()) {
+                    try {
+                        val stmt = conn.createStatement()
+                        val rs = stmt.executeQuery("SELECT * FROM BranchDetails")
+                        val meta = rs.metaData
+                        val colCount = meta.columnCount
+                        while (rs.next()) {
+                            var bName = ""
+                            val rowEmails = mutableListOf<String>()
+                            for (i in 1..colCount) {
+                                val colName = meta.getColumnName(i).lowercase()
+                                val value = rs.getString(i)?.trim().orEmpty()
+                                if (colName in setOf("branch", "branch_name", "branchname", "name") && bName.isBlank()) {
+                                    bName = value
+                                }
+                                if (value.contains("@") && (
+                                    colName.contains("mail") || colName.contains("br") ||
+                                    colName.contains("am") || colName.contains("cm") ||
+                                    colName.contains("bh") || colName.contains("1am") ||
+                                    colName.contains("2cm") || colName.contains("3bh")
+                                )) {
+                                    rowEmails.add(value)
+                                }
+                            }
+                            if (bName.equals(emp.branch.trim(), ignoreCase = true)) {
+                                resolved.addAll(rowEmails)
+                                break
+                            }
+                        }
+                        rs.close()
+                        stmt.close()
+                    } catch (_: Exception) {}
+                }
             } else if (token.contains("@")) {
                 resolved.add(token)
             } else {
-                val otherEmp = fetchEmployeeFromMasterData(conn, token)
-                if (otherEmp != null && otherEmp.email.isNotBlank()) {
-                    resolved.add(otherEmp.email)
-                } else {
-                    val emailSql = "SELECT mail_id_office, email61_personal FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
-                    try {
-                        conn.prepareStatement(emailSql).use { ps ->
-                            ps.setString(1, token)
-                            ps.executeQuery().use { rs ->
-                                if (rs.next()) {
-                                    val mail = (rs.getString("mail_id_office") ?: rs.getString("email61_personal") ?: "").trim()
-                                    if (mail.isNotBlank()) resolved.add(mail)
-                                }
+                val emailSql = "SELECT mail_id_office, email61_personal FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
+                try {
+                    conn.prepareStatement(emailSql).use { ps ->
+                        ps.setString(1, token)
+                        ps.executeQuery().use { rs ->
+                            if (rs.next()) {
+                                val mail = (rs.getString("mail_id_office") ?: rs.getString("email61_personal") ?: "").trim()
+                                if (mail.isNotBlank() && mail.contains("@")) resolved.add(mail)
                             }
                         }
-                    } catch (_: Exception) {}
-                }
+                    }
+                } catch (_: Exception) {}
             }
         }
-        return resolved.joinToString(", ")
+        return resolved.filter { it.isNotBlank() && it.contains("@") }.distinct().joinToString(",")
     }
 
     fun insertLetterEmailRecord(
@@ -390,7 +435,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             return@post
                         }
 
-                        val targetDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: empData.designation
+                        val targetDesignation = effectiveRowPromoTo(row, empData)
                         val probationPeriod = BulkLetterService.fetchProbationDays(conn, targetDesignation)
                         val responsibleBranches = BulkLetterService.fetchResponsibleBranches(conn, row.code)
 
@@ -484,4 +529,8 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
             )
         }
     }
+}
+
+private fun effectiveRowPromoTo(row: BulkLetterRow, empData: MasterEmployeeData): String {
+    return row.promoTo?.takeIf { it.isNotBlank() } ?: empData.designation
 }
