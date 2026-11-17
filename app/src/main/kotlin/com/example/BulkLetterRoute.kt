@@ -319,7 +319,7 @@ object BulkLetterService {
             stmt.setString(5, subject)
             stmt.setString(6, body)
             stmt.setString(7, attachmentLink)
-            stmt.executeUpdate()
+            stmt.execute()
         }
     }
 }
