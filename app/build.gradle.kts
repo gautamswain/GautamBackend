@@ -65,6 +65,8 @@ dependencies {
     implementation("com.google.api-client:google-api-client:2.2.0")
     implementation("com.openhtmltopdf:openhtmltopdf-pdfbox:1.0.10")
     implementation("com.openhtmltopdf:openhtmltopdf-core:1.0.10")
+    implementation("com.sun.mail:jakarta.mail:2.0.1")
+    implementation("jakarta.activation:jakarta.activation-api:2.1.2")
 
 // Apache POI for Excel (.xls and .xlsx) reading
     implementation("org.apache.poi:poi:5.2.5")

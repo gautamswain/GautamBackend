@@ -31,6 +31,21 @@ data class GenerateLetterRequest(
     val rows: List<BulkLetterRow>
 )
 
+@Serializable
+data class LetterEmailItem(
+    val id: Long,
+    val code: String,
+    val lettercode: String,
+    val tomail: String,
+    val ccmail: String,
+    val subject: String,
+    val body: String,
+    val attachmentlink: String,
+    val wef: String,
+    val status: String,
+    val sentdate: String?
+)
+
 data class MasterEmployeeData(
     val name: String,           // {1}
     val code: String,           // {2}
@@ -358,9 +373,28 @@ object BulkLetterService {
         attachmentLink: String,
         wef: String
     ) {
+        try {
+            conn.createStatement().use { stmt ->
+                stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS letteremail (
+                        code TEXT, 
+                        lettercode TEXT, 
+                        tomail TEXT, 
+                        ccmail TEXT, 
+                        subject TEXT, 
+                        body TEXT, 
+                        attachmentlink TEXT, 
+                        wef TEXT, 
+                        status TEXT DEFAULT 'PENDING', 
+                        sentdate TEXT
+                    );
+                """.trimIndent())
+            }
+        } catch (_: Exception) {}
+
         val sql = """
-            INSERT INTO letteremail (code, lettercode, tomail, ccmail, subject, body, attachmentlink, wef)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO letteremail (code, lettercode, tomail, ccmail, subject, body, attachmentlink, wef, status, sentdate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL)
         """.trimIndent()
 
         conn.prepareStatement(sql).use { stmt ->
@@ -374,6 +408,63 @@ object BulkLetterService {
             stmt.setString(8, wef)
             stmt.execute()
         }
+    }
+
+    fun sendEmailWithJakartaMail(
+        to: String,
+        cc: String,
+        subject: String,
+        htmlBody: String,
+        pdfBytes: ByteArray?,
+        pdfName: String
+    ) {
+        val host = System.getenv("SMTP_HOST")?.trim()?.ifBlank { "smtp.gmail.com" } ?: "smtp.gmail.com"
+        val port = System.getenv("SMTP_PORT")?.trim()?.ifBlank { "587" } ?: "587"
+        val user = System.getenv("SMTP_USER")?.trim() ?: System.getenv("SMTP_EMAIL")?.trim() ?: ""
+        val pass = System.getenv("SMTP_PASSWORD")?.trim() ?: System.getenv("SMTP_PASS")?.trim() ?: ""
+
+        val props = java.util.Properties().apply {
+            put("mail.smtp.auth", "true")
+            put("mail.smtp.starttls.enable", "true")
+            put("mail.smtp.host", host)
+            put("mail.smtp.port", port)
+        }
+
+        val session = if (user.isNotBlank() && pass.isNotBlank()) {
+            jakarta.mail.Session.getInstance(props, object : jakarta.mail.Authenticator() {
+                override fun getPasswordAuthentication() = jakarta.mail.PasswordAuthentication(user, pass)
+            })
+        } else {
+            jakarta.mail.Session.getInstance(props)
+        }
+
+        val message = jakarta.mail.internet.MimeMessage(session).apply {
+            setFrom(jakarta.mail.internet.InternetAddress(user.ifBlank { "hr@adhikarindia.org" }))
+            if (to.isNotBlank()) {
+                setRecipients(jakarta.mail.Message.RecipientType.TO, jakarta.mail.internet.InternetAddress.parse(to))
+            }
+            if (cc.isNotBlank()) {
+                setRecipients(jakarta.mail.Message.RecipientType.CC, jakarta.mail.internet.InternetAddress.parse(cc))
+            }
+            setSubject(subject)
+
+            val multipart = jakarta.mail.internet.MimeMultipart()
+            val textBodyPart = jakarta.mail.internet.MimeBodyPart().apply {
+                setContent(htmlBody, "text/html; charset=utf-8")
+            }
+            multipart.addBodyPart(textBodyPart)
+
+            if (pdfBytes != null && pdfBytes.isNotEmpty()) {
+                val attachPart = jakarta.mail.internet.MimeBodyPart().apply {
+                    setDataHandler(jakarta.activation.DataHandler(jakarta.mail.util.ByteArrayDataSource(pdfBytes, "application/pdf")))
+                    fileName = pdfName.ifBlank { "letter.pdf" }
+                }
+                multipart.addBodyPart(attachPart)
+            }
+            setContent(multipart)
+        }
+
+        jakarta.mail.Transport.send(message)
     }
 }
 
@@ -527,6 +618,105 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                     "exception" to e.javaClass.simpleName
                 )
             )
+        }
+    }
+
+    // GET /api/turso/letteremails
+    get("/api/turso/letteremails") {
+        val conn = dbConnectionProvider()
+        try {
+            val list = mutableListOf<LetterEmailItem>()
+            conn.createStatement().use { stmt ->
+                val rs = stmt.executeQuery("SELECT rowid AS id, code, lettercode, tomail, ccmail, subject, body, attachmentlink, wef, status, sentdate FROM letteremail ORDER BY rowid DESC;")
+                while (rs.next()) {
+                    list.add(
+                        LetterEmailItem(
+                            id = rs.getLong("id"),
+                            code = rs.getString("code") ?: "",
+                            lettercode = rs.getString("lettercode") ?: "",
+                            tomail = rs.getString("tomail") ?: "",
+                            ccmail = rs.getString("ccmail") ?: "",
+                            subject = rs.getString("subject") ?: "",
+                            body = rs.getString("body") ?: "",
+                            attachmentlink = rs.getString("attachmentlink") ?: "",
+                            wef = rs.getString("wef") ?: "",
+                            status = rs.getString("status") ?: "PENDING",
+                            sentdate = rs.getString("sentdate")
+                        )
+                    )
+                }
+                rs.close()
+            }
+            conn.close()
+            call.respond(HttpStatusCode.OK, list)
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch letteremails")))
+        }
+    }
+
+    // POST /api/turso/sendletteremails
+    get("/api/turso/sendletteremails") { // Also support GET for testing or frontend convenience if needed, but primary is POST
+        // Handled below
+    }
+
+    post("/api/turso/sendletteremails") {
+        try {
+            val items = call.receive<List<LetterEmailItem>>()
+            var sentCount = 0
+            var failedCount = 0
+
+            dbConnectionProvider().use { conn ->
+                for (item in items) {
+                    try {
+                        var pdfBytes: ByteArray? = null
+                        var pdfName = "${item.code}_Letter_${item.lettercode}.pdf"
+
+                        if (item.attachmentlink.isNotBlank()) {
+                            val fileId = if (item.attachmentlink.contains("/file/d/")) {
+                                item.attachmentlink.substringAfter("/file/d/").substringBefore("/")
+                            } else {
+                                item.attachmentlink.trim()
+                            }
+                            if (fileId.isNotBlank()) {
+                                try {
+                                    val (name, _, bytes) = GoogleDriveReportService.downloadStaffFile(fileId)
+                                    pdfBytes = bytes
+                                    if (name.isNotBlank()) pdfName = name
+                                } catch (_: Exception) {}
+                            }
+                        }
+
+                        BulkLetterService.sendEmailWithJakartaMail(
+                            to = item.tomail,
+                            cc = item.ccmail,
+                            subject = item.subject,
+                            htmlBody = item.body,
+                            pdfBytes = pdfBytes,
+                            pdfName = pdfName
+                        )
+
+                        val istZone = ZoneId.of("Asia/Kolkata")
+                        val sentTimestamp = java.time.LocalDateTime.now(istZone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+
+                        val updateSql = "UPDATE letteremail SET status = 'SENT', sentdate = ? WHERE rowid = ?"
+                        conn.prepareStatement(updateSql).use { ps ->
+                            ps.setString(1, sentTimestamp)
+                            ps.setLong(2, item.id)
+                            ps.execute()
+                        }
+                        sentCount++
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        failedCount++
+                    }
+                }
+            }
+
+            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "sentCount" to sentCount, "failedCount" to failedCount))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to send emails")))
         }
     }
 }
