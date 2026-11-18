@@ -115,12 +115,6 @@ object CurrentStaffReportService {
     }
 
     private fun formatDate(dateStr: String): String {
-        if (dateStr.isBlank() || dateStr.equals("nan", ignoreCase = true)) return ""
-        try {
-            val parsedDate = LocalDate.parse(dateStr.take(10))
-            return parsedDate.format(DateTimeFormatter.ofPattern("dd-MM-YYYY"))
-        } catch (_: Exception) {
-            return dateStr
-        }
+        return DateUtils.toDisplayDate(dateStr)
     }
 }

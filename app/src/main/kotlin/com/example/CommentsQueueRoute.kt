@@ -285,7 +285,7 @@ fun Route.commentsQueueRoute() {
                         "separater" to rowSep,
                         "jsondetails" to rawJson,
                         "display_message" to displayMsg,
-                        "wef" to rowWef
+                        "wef" to DateUtils.toDisplayDate(rowWef)
                     )
                 )
             }
@@ -413,10 +413,10 @@ fun Route.commentsQueueRoute() {
                 empName,
                 str("fathers_name", "fathersName"),
                 str("gender"),
-                str("dob"),
+                DateUtils.toExcelSerial(str("dob")),
                 designation,
                 branchName,
-                str("doj_in_adhikar", "dojInAdhikar"),
+                DateUtils.toExcelSerial(str("doj_in_adhikar", "dojInAdhikar")),
                 str("present_address", "presentAddress"),
                 str("permanent_address", "permanentAddress"),
                 str("education"),
@@ -522,7 +522,8 @@ fun Route.commentsQueueRoute() {
             val empName = str("emp_name", "empName")
             val designation = str("designation")
             val branchName = str("branch_name", "branchName")
-            val dojVal = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
+            val rawDoj = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
+            val dojVal = DateUtils.toExcelSerial(rawDoj)
 
             if (existingEmpId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing existing Code in RewJ record"))
@@ -547,7 +548,7 @@ fun Route.commentsQueueRoute() {
             addIfPresent("employee_name_3", empName)
             addIfPresent("fathers_name_4", str("fathers_name", "fathersName"))
             addIfPresent("gender_5", str("gender"))
-            addIfPresent("dob_6", str("dob"))
+            addIfPresent("dob_6", DateUtils.toExcelSerial(str("dob")))
             addIfPresent("designation_7", designation)
             addIfPresent("branch_name_9", branchName)
             addIfPresent("doj_in_adhikar_10", dojVal)

@@ -84,7 +84,7 @@ object StaffRepository {
             exitDate = DateUtils.toDisplayDate(getVal("exit_date_56", "exit_date")),
             idphoto68 = getVal("idphoto68_57", "idphoto68"),
             mailIdOffice = getVal("mail_id_office_58", "mail_id_office"),
-            coment77 = DateUtils.toDisplayDate(getVal("coment77_59", "coment77")),
+            coment77 = getVal("coment77_59", "coment77"),
             documentSubmissionDate = DateUtils.toDisplayDate(getVal("documentsubmissiondate78_60", "document_submission_date", "documentsubmissiondate78_60")),
             idPrepare = getVal("id_prepare", "idprepare"),
             officeWellbeings = getVal("officewelbeings"),

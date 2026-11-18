@@ -14,9 +14,9 @@ object AdhikarDataMapper {
             empName = raw["employee_name_3"] ?: raw["Name"] ?: raw["emp_name"] ?: "",
             fathersName = raw["fathers_name_4"] ?: raw["fathers_name"] ?: "",
             gender = raw["gender_5"] ?: raw["gender"] ?: "",
-            dob = raw["dob_6"] ?: raw["dob"] ?: "",
-            doj = raw["doj_in_adhikar_10"] ?: raw["DOJ"] ?: raw["doj"] ?: "",
-            dol = raw["dol_25"] ?: raw["dol"] ?: "",
+            dob = com.example.DateUtils.toDisplayDate(raw["dob_6"] ?: raw["dob"] ?: ""),
+            doj = com.example.DateUtils.toDisplayDate(raw["doj_in_adhikar_10"] ?: raw["DOJ"] ?: raw["doj"] ?: ""),
+            dol = com.example.DateUtils.toDisplayDate(raw["dol_25"] ?: raw["dol"] ?: ""),
 
             // Professional Details
             designation = raw["designation_7"] ?: raw["Designation"] ?: raw["designation"] ?: "",
