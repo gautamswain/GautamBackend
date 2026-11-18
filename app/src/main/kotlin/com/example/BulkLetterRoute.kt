@@ -735,80 +735,123 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
     // 2. Add or Update bulkletter template with duplicate lettercode check
     post("/api/turso/letter-templates/save") {
-        try {
-            val req = call.receive<SaveLetterTemplateRequest>()
-            val cleanCode = req.lettercode.trim()
-            if (cleanCode.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Lettercode cannot be empty"))
-                return@post
-            }
+    val log = call.application.environment.log
+    try {
+        val rawBody = call.receiveText()
+        log.info("Received /letter-templates/save payload: $rawBody")
 
-            val cleanHtml = req.templete.replace(Regex("\\s*\\n\\s*"), "").trim()
-
-            dbConnectionProvider().use { conn ->
-                val checkSql = "SELECT COUNT(*) FROM bulkletter WHERE TRIM(lettercode) = TRIM(?)"
-                val exists = conn.prepareStatement(checkSql).use { ps ->
-                    ps.setString(1, cleanCode)
-                    ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
-                }
-
-                if (req.mode.equals("ADD", ignoreCase = true)) {
-                    if (exists) {
-                        call.respond(
-                            HttpStatusCode.Conflict,
-                            mapOf("error" to "Duplicate Error: Lettercode '$cleanCode' already exists!")
-                        )
-                        return@post
-                    }
-                    val insertSql = """
-                        INSERT INTO bulkletter (lettercode, templete, filenameformat, subject, body, tomail, ccmail, wef, recupdate)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """.trimIndent()
-                    conn.prepareStatement(insertSql).use { ps ->
-                        ps.setString(1, cleanCode)
-                        ps.setString(2, cleanHtml)
-                        ps.setString(3, req.filenameformat)
-                        ps.setString(4, req.subject)
-                        ps.setString(5, req.body)
-                        ps.setString(6, req.tomail)
-                        ps.setString(7, req.ccmail)
-                        ps.setString(8, req.wef)
-                        ps.setString(9, req.recupdate)
-                        ps.executeUpdate()
-                    }
-                } else {
-                    if (!exists) {
-                        call.respond(
-                            HttpStatusCode.NotFound,
-                            mapOf("error" to "Lettercode '$cleanCode' not found! Use Add mode to create.")
-                        )
-                        return@post
-                    }
-                    val updateSql = """
-                        UPDATE bulkletter 
-                        SET templete = ?, filenameformat = ?, subject = ?, body = ?, 
-                            tomail = ?, ccmail = ?, wef = ?, recupdate = ?
-                        WHERE TRIM(lettercode) = TRIM(?)
-                    """.trimIndent()
-                    conn.prepareStatement(updateSql).use { ps ->
-                        ps.setString(1, cleanHtml)
-                        ps.setString(2, req.filenameformat)
-                        ps.setString(3, req.subject)
-                        ps.setString(4, req.body)
-                        ps.setString(5, req.tomail)
-                        ps.setString(6, req.ccmail)
-                        ps.setString(7, req.wef)
-                        ps.setString(8, req.recupdate)
-                        ps.setString(9, cleanCode)
-                        ps.executeUpdate()
-                    }
-                }
-            }
-            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "lettercode" to cleanCode))
-        } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Save failed")))
+        val req = lenientJson.decodeFromString<SaveLetterTemplateRequest>(rawBody)
+        val cleanCode = req.lettercode.trim()
+        if (cleanCode.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Lettercode cannot be empty"))
+            return@post
         }
+
+        val cleanHtml = req.templete.replace(Regex("\\s*\\n\\s*"), "").trim()
+
+        dbConnectionProvider().use { conn ->
+            // 1. Discover exact column names via ResultSetMetaData
+            val actualCols = mutableMapOf<String, String>()
+            try {
+                conn.createStatement().use { st ->
+                    st.executeQuery("SELECT * FROM bulkletter LIMIT 1").use { rs ->
+                        val meta = rs.metaData
+                        for (i in 1..meta.columnCount) {
+                            val exactName = meta.getColumnName(i) ?: continue
+                            actualCols[exactName.trim().lowercase()] = exactName
+                        }
+                    }
+                }
+            } catch (tableEx: Exception) {
+                log.warn("bulkletter table check failed, creating table: ${tableEx.message}")
+                conn.createStatement().use { st ->
+                    st.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS bulkletter (
+                            lettercode TEXT,
+                            templete TEXT,
+                            filenameformat TEXT,
+                            subject TEXT,
+                            body TEXT,
+                            tomail TEXT,
+                            ccmail TEXT,
+                            wef TEXT,
+                            recupdate TEXT
+                        )
+                        """.trimIndent()
+                    )
+                }
+                listOf("lettercode", "templete", "filenameformat", "subject", "body", "tomail", "ccmail", "wef", "recupdate")
+                    .forEach { actualCols[it] = it }
+            }
+
+            fun qCol(key: String): String? = actualCols[key]?.let { "\"$it\"" }
+
+            val codeCol = qCol("lettercode") ?: "\"lettercode\""
+            val checkSql = "SELECT COUNT(*) FROM bulkletter WHERE TRIM($codeCol) = TRIM(?)"
+            val exists = conn.prepareStatement(checkSql).use { ps ->
+                ps.setString(1, cleanCode)
+                ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
+            }
+
+            val fieldValues = linkedMapOf<String, String>()
+            qCol("templete")?.let { fieldValues[it] = cleanHtml }
+            qCol("filenameformat")?.let { fieldValues[it] = req.filenameformat }
+            qCol("subject")?.let { fieldValues[it] = req.subject }
+            qCol("body")?.let { fieldValues[it] = req.body }
+            qCol("tomail")?.let { fieldValues[it] = req.tomail }
+            qCol("ccmail")?.let { fieldValues[it] = req.ccmail }
+            qCol("wef")?.let { fieldValues[it] = req.wef }
+            qCol("recupdate")?.let { fieldValues[it] = req.recupdate }
+
+            if (req.mode.equals("ADD", ignoreCase = true)) {
+                if (exists) {
+                    call.respond(
+                        HttpStatusCode.Conflict,
+                        mapOf("error" to "Duplicate Error: Lettercode '$cleanCode' already exists!")
+                    )
+                    return@post
+                }
+                val allCols = listOf(codeCol) + fieldValues.keys
+                val placeholders = allCols.joinToString(", ") { "?" }
+                val insertSql = "INSERT INTO bulkletter (${allCols.joinToString(", ")}) VALUES ($placeholders)"
+
+                conn.prepareStatement(insertSql).use { ps ->
+                    ps.setString(1, cleanCode)
+                    fieldValues.values.forEachIndexed { idx, value ->
+                        ps.setString(idx + 2, value)
+                    }
+                    ps.executeUpdate()
+                }
+            } else {
+                if (!exists) {
+                    call.respond(
+                        HttpStatusCode.NotFound,
+                        mapOf("error" to "Lettercode '$cleanCode' not found! Use Add mode to create.")
+                    )
+                    return@post
+                }
+                val setClause = fieldValues.keys.joinToString(", ") { "$it = ?" }
+                val updateSql = "UPDATE bulkletter SET $setClause WHERE TRIM($codeCol) = TRIM(?)"
+
+                conn.prepareStatement(updateSql).use { ps ->
+                    fieldValues.values.forEachIndexed { idx, value ->
+                        ps.setString(idx + 1, value)
+                    }
+                    ps.setString(fieldValues.size + 1, cleanCode)
+                    ps.executeUpdate()
+                }
+            }
+        }
+        call.respond(HttpStatusCode.OK, mapOf("status" to "success", "lettercode" to cleanCode))
+    } catch (e: Exception) {
+        log.error("FAILED POST /api/turso/letter-templates/save", e)
+        call.respond(
+            HttpStatusCode.InternalServerError,
+            mapOf("error" to "${e.javaClass.simpleName}: ${e.localizedMessage ?: e.message ?: "Save failed"}")
+        )
     }
+}
 
     // 3. GET /api/turso/resolve-mail?code=ADKR2787&rule=ownp,pipe,branch,ADKR1001o
     get("/api/turso/resolve-mail") {
