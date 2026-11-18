@@ -9,8 +9,6 @@ import kotlinx.serialization.Serializable
 import java.io.ByteArrayOutputStream
 import java.sql.Connection
 import java.text.DecimalFormat
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -39,6 +37,12 @@ object SalarySlipGenerator {
         return indianFormat.format(amount)
     }
 
+    private fun xmlEscape(str: String): String {
+        return str.replace("&", "&amp;")
+                  .replace("<", "&lt;")
+                  .replace(">", "&gt;")
+    }
+
     fun numberToWords(amount: Double): String {
         val n = amount.toLong()
         if (n == 0L) return "Zero"
@@ -50,7 +54,7 @@ object SalarySlipGenerator {
             val current = if (num % 100 < 20) {
                 units[num % 100]
             } else {
-                tens[(num % 100) / 10] + (if (num % 10 > 0) " " + units[num % 10] else "")
+                tens[(num % 100) / 10] + if (num % 10 > 0) " " + units[num % 10] else ""
             }
 
             return if (num > 99) {
@@ -98,22 +102,21 @@ object SalarySlipGenerator {
     }
 
     fun generateHtml(sal: SalaryDto, master: MasterDataDto?): String {
-        val monthName = sal.month.ifBlank { "Current Month" }
-        val empName = sal.employeeName3.ifBlank { master?.employeeName ?: sal.empId2 }
-        val empCode = sal.empId2.ifBlank { master?.empId ?: sal.id }
-        val designation = sal.designation7.ifBlank { master?.designation ?: "" }
-        val department = sal.department8.ifBlank { master?.department ?: "" }
-        val branch = sal.branchName9.ifBlank { master?.branchName ?: "" }
-        val paidDays = sal.paidDays8.ifBlank { "30" }
-        val bankName = sal.bankName19.ifBlank { master?.bankName ?: "" }
-        val accountNo = sal.bankAccountNumber20.ifBlank { master?.bankAccountNumber ?: "" }
-        val ifsc = sal.ifscCodeBankBranchName21.ifBlank { master?.ifscCodeBankBranchName ?: "" }
-        val doj = DateUtils.toDisplayDate(master?.dojInAdhikar.orEmpty())
-        val dob = DateUtils.toDisplayDate(master?.dob.orEmpty())
-        val gender = master?.gender.orEmpty()
-        val pan = master?.panCardNo.orEmpty()
+        val monthName = xmlEscape(sal.month.ifBlank { "Current Month" })
+        val empName = xmlEscape(sal.employeeName3.ifBlank { master?.employeeName ?: sal.empId2 })
+        val empCode = xmlEscape(sal.empId2.ifBlank { master?.empId ?: sal.id })
+        val designation = xmlEscape(sal.designation7.ifBlank { master?.designation ?: "" })
+        val department = xmlEscape(sal.department8.ifBlank { master?.department ?: "" })
+        val branch = xmlEscape(sal.branchName9.ifBlank { master?.branchName ?: "" })
+        val paidDays = xmlEscape(sal.paidDays8.ifBlank { "30" })
+        val bankName = xmlEscape(sal.bankName19.ifBlank { master?.bankName ?: "" })
+        val accountNo = xmlEscape(sal.bankAccountNumber20.ifBlank { master?.bankAccountNumber ?: "" })
+        val ifsc = xmlEscape(sal.ifscCodeBankBranchName21.ifBlank { master?.ifscCodeBankBranchName ?: "" })
+        val doj = xmlEscape(DateUtils.toDisplayDate(master?.dojInAdhikar.orEmpty()))
+        val dob = xmlEscape(DateUtils.toDisplayDate(master?.dob.orEmpty()))
+        val gender = xmlEscape(master?.gender.orEmpty())
+        val pan = xmlEscape(master?.panCardNo.orEmpty())
 
-        // Earnings
         val rawEarnings = listOf(
             SalaryHead("Basic + DA", sal.basicDa9.toDoubleOrNull() ?: 0.0),
             SalaryHead("HRA", sal.hra10.toDoubleOrNull() ?: 0.0),
@@ -130,7 +133,6 @@ object SalarySlipGenerator {
             SalaryHead("Back Salary", sal.backSalaryGive.toDoubleOrNull() ?: 0.0)
         )
 
-        // Deductions
         val rawDeductions = listOf(
             SalaryHead("EPF", sal.epf5549.toDoubleOrNull() ?: 0.0),
             SalaryHead("ESI", sal.esi5650.toDoubleOrNull() ?: 0.0),
@@ -155,9 +157,9 @@ object SalarySlipGenerator {
             val earn = validEarnings.getOrNull(i)
             val ded = validDeductions.getOrNull(i)
 
-            val earnLabel = earn?.label ?: ""
+            val earnLabel = xmlEscape(earn?.label ?: "")
             val earnAmt = if (earn != null) formatMoney(earn.amount) else ""
-            val dedLabel = ded?.label ?: ""
+            val dedLabel = xmlEscape(ded?.label ?: "")
             val dedAmt = if (ded != null) formatMoney(ded.amount) else ""
 
             rowsHtml.append("""
@@ -166,7 +168,7 @@ object SalarySlipGenerator {
                     <td class="text-right">$earnAmt</td>
                     <td>$dedLabel</td>
                     <td class="text-right">$dedAmt</td>
-                }
+                </tr>
             """.trimIndent())
         }
 
@@ -307,7 +309,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
             dbConnectionProvider().use { conn ->
                 for (row in req.rows) {
                     val sal = SalarySlipGenerator.fetchSalaryRecord(conn, row.code, row.month)
-                    if (sal == null) continue
+                        ?: continue
 
                     val master = TursoDatabaseService.getRecordByEmpId(row.code)
                     val html = SalarySlipGenerator.generateHtml(sal, master)
@@ -318,11 +320,13 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                     val monthStr = (row.month.ifBlank { sal.month }).replace(Regex("[^A-Za-z0-9_-]"), "_")
                     val fileName = "Salary Slip_${empName}_${safeCode}_${monthStr}.pdf"
 
-                    val pdfBytes = LetterPdfService.generateLetterPdf(
-                        formattedHtmlBody = html,
-                        refNo = "SAL/${row.code}/${System.currentTimeMillis()}",
-                        date = LocalDate.now().format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
-                    )
+                    val pdfOut = ByteArrayOutputStream()
+                    com.openhtmltopdf.pdfboxout.PdfRendererBuilder()
+                        .useFastMode()
+                        .withHtmlContent(html, null)
+                        .toStream(pdfOut)
+                        .run()
+                    val pdfBytes = pdfOut.toByteArray()
 
                     if (req.saveToDrive) {
                         try {
