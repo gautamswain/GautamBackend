@@ -97,6 +97,54 @@ fun Application.module() {
         commentsQueueRoute() 
         currentStaffReportRouting()
         employeeRoutes()
+        letterCodeRoutes { last4Digits, _ ->
+            val matches = mutableListOf<EmployeeMatchInfo>()
+            val conn = TursoDatabaseService.getConnection()
+            if (conn != null) {
+                try {
+                    val sql = "SELECT * FROM MasterData WHERE UPPER(TRIM(Code_2)) LIKE '%' || ?"
+                    val pstmt = conn.prepareStatement(sql)
+                    pstmt.setString(1, last4Digits.trim())
+                    val rs = pstmt.executeQuery()
+                    while (rs.next()) {
+                        val dto = StaffRepository.parseMasterDataDto(rs)
+                        val code = dto.empId.ifBlank { dto.id }
+
+                        var letterSub: String? = null
+                        var letterStat: String? = null
+                        try {
+                            val emailStmt = conn.prepareStatement("SELECT subject, status FROM letteremail WHERE UPPER(TRIM(code)) = UPPER(TRIM(?)) ORDER BY rowid DESC LIMIT 1")
+                            emailStmt.setString(1, code)
+                            val emailRs = emailStmt.executeQuery()
+                            if (emailRs.next()) {
+                                letterSub = emailRs.getString("subject")
+                                letterStat = emailRs.getString("status")
+                            }
+                            emailRs.close()
+                            emailStmt.close()
+                        } catch (_: Exception) {}
+
+                        matches.add(
+                            EmployeeMatchInfo(
+                                employeeCode = code,
+                                employeeName = dto.employeeName,
+                                designation = dto.designation.ifBlank { null },
+                                branch = dto.branchName.ifBlank { null },
+                                letterSubject = letterSub,
+                                letterStatus = letterStat
+                            )
+                        )
+                    }
+                    rs.close()
+                    pstmt.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    try { conn.close() } catch (_: Exception) {}
+                }
+            }
+            matches
+        }
 
         reportMeRouting { TursoDatabaseService.getConnection() }
 

@@ -55,6 +55,48 @@ data class SendEmailsResponse(
 )
 
 @Serializable
+data class ResolveMailRequest(
+    val code: String,
+    val rule: String // e.g., "ownp, owno, pipe, branch, ADKR1001o, ADKR1002p"
+)
+
+@Serializable
+data class ResolveMailResponse(
+    val employeeCode: String,
+    val branch: String,
+    val rule: String,
+    val emails: List<String>,
+    val joinedEmails: String
+)
+
+@Serializable
+data class LetterTemplateDto(
+    val lettercode: String,
+    val templete: String,
+    val filenameformat: String = "",
+    val subject: String = "",
+    val body: String = "",
+    val tomail: String = "",
+    val ccmail: String = "",
+    val wef: String = "",
+    val recupdate: String = ""
+)
+
+@Serializable
+data class SaveLetterTemplateRequest(
+    val mode: String = "UPDATE", // "ADD" or "UPDATE"
+    val lettercode: String,
+    val templete: String,
+    val filenameformat: String = "",
+    val subject: String = "",
+    val body: String = "",
+    val tomail: String = "",
+    val ccmail: String = "",
+    val wef: String = "",
+    val recupdate: String = ""
+)
+
+@Serializable
 data class BrevoAddress(val email: String, val name: String? = null)
 
 @Serializable
@@ -110,13 +152,38 @@ data class BulkLetterTemplateConfig(
     val body: String,
     val tomail: String,
     val ccmail: String,
-    val wef: String
+    val wef: String,
+    val recupdate: String
 )
 
 object BulkLetterService {
 
     private val istZone: ZoneId = ZoneId.of("Asia/Kolkata")
     private val displayDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy")
+    private val emailExtractRegex = Regex("<([^>]+)>")
+
+    fun extractCleanEmail(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return ""
+        val match = emailExtractRegex.find(trimmed)
+        val extracted = match?.groupValues?.getOrNull(1)?.trim() ?: trimmed
+        return if (extracted.contains("@")) extracted else ""
+    }
+
+    fun formatExcelOrTextDate(raw: String): String {
+        val clean = raw.trim()
+        if (clean.isBlank()) return ""
+
+        // Handle 5-digit Excel serial date (e.g. 38108, 44986)
+        clean.toDoubleOrNull()?.toLong()?.let { serial ->
+            if (serial in 10000L..90000L) {
+                return LocalDate.of(1899, 12, 30)
+                    .plusDays(serial)
+                    .format(displayDateFormatter)
+            }
+        }
+        return clean
+    }
 
     fun fetchEmployeeFromMasterData(conn: Connection, empCode: String): MasterEmployeeData? {
         val sql = """
@@ -137,13 +204,13 @@ object BulkLetterService {
                     designation = dto.designation,
                     branch = dto.branchName,
                     gender = dto.gender,
-                    doj = dto.dojInAdhikar,
-                    dol = dto.dol,
+                    doj = formatExcelOrTextDate(dto.dojInAdhikar),
+                    dol = formatExcelOrTextDate(dto.dol),
                     salary = dto.salaryCode.ifBlank { dto.slary },
                     fatherName = dto.fathersName,
                     presentAddress = dto.presentAddress,
                     mobileNo = dto.personalContactNumber,
-                    email = dto.email61Personal.ifBlank { dto.mailIdOffice }
+                    email = extractCleanEmail(dto.email61Personal).ifBlank { extractCleanEmail(dto.mailIdOffice) }
                 )
             }
         }
@@ -151,8 +218,7 @@ object BulkLetterService {
 
     fun fetchLetterConfigFromDb(conn: Connection, letterCode: String): BulkLetterTemplateConfig? {
         val sql = """
-            SELECT lettercode, templete, filenameformat, subject, body, tomail, ccmail, wef 
-            FROM bulkletter 
+            SELECT * FROM bulkletter 
             WHERE TRIM(lettercode) = TRIM(?) 
             LIMIT 1
         """.trimIndent()
@@ -161,15 +227,20 @@ object BulkLetterService {
             stmt.setString(1, letterCode)
             stmt.executeQuery().use { rs ->
                 if (rs.next()) {
+                    val meta = rs.metaData
+                    val colMap = (1..meta.columnCount).associate {
+                        meta.getColumnName(it).trim().lowercase() to (rs.getString(it)?.trim().orEmpty())
+                    }
                     return BulkLetterTemplateConfig(
-                        lettercode = rs.getString("lettercode")?.trim().orEmpty(),
-                        templete = rs.getString("templete")?.trim().orEmpty(),
-                        filenameformat = rs.getString("filenameformat")?.trim().orEmpty(),
-                        subject = rs.getString("subject")?.trim().orEmpty(),
-                        body = rs.getString("body")?.trim().orEmpty(),
-                        tomail = rs.getString("tomail")?.trim().orEmpty(),
-                        ccmail = rs.getString("ccmail")?.trim().orEmpty(),
-                        wef = rs.getString("wef")?.trim().orEmpty()
+                        lettercode = colMap["lettercode"].orEmpty(),
+                        templete = colMap["templete"].orEmpty(),
+                        filenameformat = colMap["filenameformat"].orEmpty(),
+                        subject = colMap["subject"].orEmpty(),
+                        body = colMap["body"].orEmpty(),
+                        tomail = colMap["tomail"].orEmpty(),
+                        ccmail = colMap["ccmail"].orEmpty(),
+                        wef = colMap["wef"].orEmpty(),
+                        recupdate = colMap["recupdate"].orEmpty()
                     )
                 }
             }
@@ -191,7 +262,7 @@ object BulkLetterService {
                     var isResponsible = false
 
                     for (i in 1..colCount) {
-                        val colName = meta.getColumnName(i).lowercase()
+                        val colName = meta.getColumnName(i).trim().lowercase()
                         val value = rs.getString(i)?.trim().orEmpty()
 
                         if (branchName.isBlank() &&
@@ -243,7 +314,7 @@ object BulkLetterService {
     }
 
     fun calculateInterviewDate(dojStr: String): String {
-        val cleanDoj = dojStr.trim()
+        val cleanDoj = formatExcelOrTextDate(dojStr)
         if (cleanDoj.isBlank()) return ""
 
         val formats = listOf(
@@ -287,7 +358,9 @@ object BulkLetterService {
         val effectiveBranch = row.dBranch?.takeIf { it.isNotBlank() } ?: emp.branch
         val effectiveAddress = row.address?.takeIf { it.isNotBlank() } ?: emp.presentAddress
         val effectiveDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: emp.designation
-        val effectiveDolOrWef = row.wef?.takeIf { it.isNotBlank() } ?: resolvedWef.takeIf { it.isNotBlank() } ?: emp.dol
+        val effectiveDolOrWef = formatExcelOrTextDate(
+            row.wef?.takeIf { it.isNotBlank() } ?: resolvedWef.takeIf { it.isNotBlank() } ?: emp.dol
+        )
 
         val mapper: (String) -> String = if (isEmailField) { { it } } else { { xmlEscape(it) } }
 
@@ -316,80 +389,192 @@ object BulkLetterService {
             .replace("{wef}", mapper(effectiveDolOrWef))
     }
 
+    /**
+     * 6-Token Email Resolver:
+     * - ownp: Employee's own personal email (MasterData -> email61_personal_52 / email61_personal)
+     * - owno: Employee's own office email (MasterData -> mail_id_office_58 / mail_id_office)
+     * - own: Both own office & personal emails
+     * - pipe: BM > AM > CM > BH (BranchDetails -> mailbr, mail1am, mail2cm, mail3bh)
+     * - branch: Branch mail only (BranchDetails -> mailbr)
+     * - Codeo (e.g., ADKR1234o): Coded staff's office email
+     * - CodeP (e.g., ADKR1234p): Coded staff's personal email
+     * - Direct email address containing '@'
+     */
     fun resolveEmailField(conn: Connection, rawToken: String, emp: MasterEmployeeData): String {
         val tokens = rawToken.split(",").map { it.trim() }.filter { it.isNotBlank() }
-        val resolved = mutableSetOf<String>()
-        for (token in tokens) {
-            if (token.equals("own", ignoreCase = true)) {
-                val sql = "SELECT mail_id_office, email61_personal, personal_email FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
-                try {
-                    conn.prepareStatement(sql).use { ps ->
-                        ps.setString(1, emp.code)
-                        ps.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                val office = (rs.getString("mail_id_office") ?: "").trim()
-                                val personal1 = (rs.getString("email61_personal") ?: "").trim()
-                                val personal2 = (rs.getString("personal_email") ?: "").trim()
-                                if (office.isNotBlank() && office.contains("@")) resolved.add(office)
-                                if (personal1.isNotBlank() && personal1.contains("@")) resolved.add(personal1)
-                                if (personal2.isNotBlank() && personal2.contains("@")) resolved.add(personal2)
-                            }
+        val resolved = linkedSetOf<String>()
+
+        fun fetchMasterEmail(targetCode: String, preferOffice: Boolean): String? {
+            val sql = "SELECT * FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
+            try {
+                conn.prepareStatement(sql).use { ps ->
+                    ps.setString(1, targetCode)
+                    ps.executeQuery().use { rs ->
+                        if (!rs.next()) return null
+                        val meta = rs.metaData
+                        val colMap = (1..meta.columnCount).associate {
+                            meta.getColumnName(it).trim().lowercase() to (rs.getString(it)?.trim().orEmpty())
                         }
+                        val office = extractCleanEmail(
+                            colMap["mail_id_office_58"].orEmpty().ifBlank { colMap["mail_id_office"].orEmpty() }
+                        )
+                        val personal = extractCleanEmail(
+                            colMap["email61_personal_52"].orEmpty()
+                                .ifBlank { colMap["email61_personal"].orEmpty() }
+                                .ifBlank { colMap["personal_email"].orEmpty() }
+                        )
+
+                        val chosen = if (preferOffice) office else personal
+                        return chosen.takeIf { it.contains("@") }
                     }
-                } catch (_: Exception) {}
-                if (emp.email.isNotBlank() && emp.email.contains("@")) resolved.add(emp.email)
-            } else if (token.equals("pipe", ignoreCase = true)) {
-                if (emp.branch.isNotBlank()) {
-                    try {
-                        val stmt = conn.createStatement()
-                        val rs = stmt.executeQuery("SELECT * FROM BranchDetails")
+                }
+            } catch (_: Exception) {
+                return null
+            }
+        }
+
+        fun fetchBranchEmails(branchName: String, pipeAll: Boolean): List<String> {
+            if (branchName.isBlank()) return emptyList()
+            val found = mutableListOf<String>()
+            try {
+                conn.createStatement().use { stmt ->
+                    stmt.executeQuery("SELECT * FROM BranchDetails").use { rs ->
                         val meta = rs.metaData
                         val colCount = meta.columnCount
                         while (rs.next()) {
                             var bName = ""
-                            val rowEmails = mutableListOf<String>()
+                            var mailBr = ""
+                            val pipeList = mutableListOf<String>()
+
                             for (i in 1..colCount) {
-                                val colName = meta.getColumnName(i).lowercase()
-                                val value = rs.getString(i)?.trim().orEmpty()
-                                if (colName in setOf("branch", "branch_name", "branchname", "name") && bName.isBlank()) {
-                                    bName = value
+                                val col = meta.getColumnName(i).trim().lowercase()
+                                val valStr = rs.getString(i)?.trim().orEmpty()
+                                if (bName.isBlank() && col in setOf("branch", "branch_name", "branchname", "name")) {
+                                    bName = valStr
                                 }
-                                if (value.contains("@") && (
-                                    colName.contains("mail") || colName.contains("br") ||
-                                    colName.contains("am") || colName.contains("cm") ||
-                                    colName.contains("bh") || colName.contains("1am") ||
-                                    colName.contains("2cm") || colName.contains("3bh")
-                                )) {
-                                    rowEmails.add(value)
+                                val cleanMail = extractCleanEmail(valStr)
+                                if (col == "mailbr" && cleanMail.isNotBlank()) {
+                                    mailBr = cleanMail
+                                }
+                                if (cleanMail.isNotBlank() && col in setOf("mailbr", "mail1am", "mail2cm", "mail3bh", "1am", "2cm", "3bh")) {
+                                    pipeList.add(cleanMail)
                                 }
                             }
-                            if (bName.equals(emp.branch.trim(), ignoreCase = true)) {
-                                resolved.addAll(rowEmails)
+
+                            if (bName.equals(branchName.trim(), ignoreCase = true)) {
+                                if (pipeAll) {
+                                    found.addAll(pipeList)
+                                } else if (mailBr.isNotBlank()) {
+                                    found.add(mailBr)
+                                }
                                 break
                             }
                         }
-                        rs.close()
-                        stmt.close()
-                    } catch (_: Exception) {}
-                }
-            } else if (token.contains("@")) {
-                resolved.add(token)
-            } else {
-                val emailSql = "SELECT mail_id_office, email61_personal FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
-                try {
-                    conn.prepareStatement(emailSql).use { ps ->
-                        ps.setString(1, token)
-                        ps.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                val mail = (rs.getString("mail_id_office") ?: rs.getString("email61_personal") ?: "").trim()
-                                if (mail.isNotBlank() && mail.contains("@")) resolved.add(mail)
-                            }
-                        }
                     }
-                } catch (_: Exception) {}
+                }
+            } catch (_: Exception) { }
+            return found
+        }
+
+        for (token in tokens) {
+            when {
+                token.equals("ownp", ignoreCase = true) -> {
+                    fetchMasterEmail(emp.code, preferOffice = false)?.let { resolved.add(it) }
+                }
+                token.equals("owno", ignoreCase = true) -> {
+                    fetchMasterEmail(emp.code, preferOffice = true)?.let { resolved.add(it) }
+                }
+                token.equals("own", ignoreCase = true) -> {
+                    fetchMasterEmail(emp.code, preferOffice = true)?.let { resolved.add(it) }
+                    fetchMasterEmail(emp.code, preferOffice = false)?.let { resolved.add(it) }
+                    val fallback = extractCleanEmail(emp.email)
+                    if (fallback.isNotBlank()) resolved.add(fallback)
+                }
+                token.equals("pipe", ignoreCase = true) -> {
+                    resolved.addAll(fetchBranchEmails(emp.branch, pipeAll = true))
+                }
+                token.equals("branch", ignoreCase = true) -> {
+                    resolved.addAll(fetchBranchEmails(emp.branch, pipeAll = false))
+                }
+                token.contains("@") -> {
+                    val clean = extractCleanEmail(token)
+                    if (clean.isNotBlank()) resolved.add(clean)
+                }
+                token.length > 4 && token.endsWith("o", ignoreCase = true) && token.dropLast(1).any { it.isDigit() } -> {
+                    val staffCode = token.dropLast(1)
+                    fetchMasterEmail(staffCode, preferOffice = true)?.let { resolved.add(it) }
+                }
+                token.length > 4 && token.endsWith("p", ignoreCase = true) && token.dropLast(1).any { it.isDigit() } -> {
+                    val staffCode = token.dropLast(1)
+                    fetchMasterEmail(staffCode, preferOffice = false)?.let { resolved.add(it) }
+                }
+                else -> {
+                    val mail = fetchMasterEmail(token, preferOffice = true)
+                        ?: fetchMasterEmail(token, preferOffice = false)
+                    if (mail != null) resolved.add(mail)
+                }
             }
         }
+
         return resolved.filter { it.isNotBlank() && it.contains("@") }.distinct().joinToString(",")
+    }
+
+    fun resolveMailForApi(conn: Connection, rawRule: String, empCode: String): ResolveMailResponse {
+        val emp = fetchEmployeeFromMasterData(conn, empCode)
+            ?: throw IllegalArgumentException("Employee not found for code: $empCode")
+        val joined = resolveEmailField(conn, rawRule, emp)
+        val list = if (joined.isBlank()) emptyList() else joined.split(",")
+        return ResolveMailResponse(
+            employeeCode = emp.code,
+            branch = emp.branch,
+            rule = rawRule,
+            emails = list,
+            joinedEmails = joined
+        )
+    }
+
+    fun appendStaffHistoryComment(
+        conn: Connection,
+        empCode: String,
+        resolvedRecUpdate: String,
+        todayDate: String
+    ) {
+        val cleanNote = resolvedRecUpdate.trim()
+        if (cleanNote.isBlank()) return
+
+        val formattedBlock = if (cleanNote.startsWith("{") && cleanNote.endsWith("}")) {
+            cleanNote
+        } else {
+            "{$todayDate: $cleanNote}"
+        }
+
+        try {
+            val selectSql = "SELECT coment77_59 FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1"
+            var existingComment = ""
+            conn.prepareStatement(selectSql).use { ps ->
+                ps.setString(1, empCode)
+                ps.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        existingComment = rs.getString("coment77_59")?.trim().orEmpty()
+                    }
+                }
+            }
+
+            val updatedComment = if (existingComment.isBlank()) {
+                formattedBlock
+            } else {
+                "$existingComment $formattedBlock"
+            }
+
+            val updateSql = "UPDATE MasterData SET coment77_59 = ? WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?))"
+            conn.prepareStatement(updateSql).use { ps ->
+                ps.setString(1, updatedComment)
+                ps.setString(2, empCode)
+                ps.executeUpdate()
+            }
+        } catch (e: Exception) {
+            println("Warning: Failed to update coment77_59 for $empCode: ${e.message}")
+        }
     }
 
     fun insertLetterEmailRecord(
@@ -461,7 +646,7 @@ object BulkLetterService {
         fun parseAddresses(raw: String): List<BrevoAddress> {
             if (raw.isBlank()) return emptyList()
             return raw.split(Regex("[,;]"))
-                .map { it.trim() }
+                .map { extractCleanEmail(it) }
                 .filter { it.contains("@") }
                 .map { BrevoAddress(email = it) }
         }
@@ -513,10 +698,152 @@ object BulkLetterService {
 }
 
 fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
+
+    // 1. Fetch all bulkletter templates for dropdown / editor
+    get("/api/turso/letter-templates") {
+        try {
+            val list = mutableListOf<LetterTemplateDto>()
+            dbConnectionProvider().use { conn ->
+                conn.createStatement().use { stmt ->
+                    stmt.executeQuery("SELECT * FROM bulkletter ORDER BY CAST(lettercode AS INTEGER) ASC").use { rs ->
+                        val meta = rs.metaData
+                        val cols = (1..meta.columnCount).map { meta.getColumnName(it).trim().lowercase() }
+                        while (rs.next()) {
+                            fun col(name: String) = if (cols.contains(name)) rs.getString(cols.indexOf(name) + 1)?.trim().orEmpty() else ""
+                            list.add(
+                                LetterTemplateDto(
+                                    lettercode = col("lettercode"),
+                                    templete = col("templete"),
+                                    filenameformat = col("filenameformat"),
+                                    subject = col("subject"),
+                                    body = col("body"),
+                                    tomail = col("tomail"),
+                                    ccmail = col("ccmail"),
+                                    wef = col("wef"),
+                                    recupdate = col("recupdate")
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            call.respond(HttpStatusCode.OK, list)
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to fetch templates")))
+        }
+    }
+
+    // 2. Add or Update bulkletter template with duplicate lettercode check
+    post("/api/turso/letter-templates/save") {
+        try {
+            val req = call.receive<SaveLetterTemplateRequest>()
+            val cleanCode = req.lettercode.trim()
+            if (cleanCode.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Lettercode cannot be empty"))
+                return@post
+            }
+
+            val cleanHtml = req.templete.replace(Regex("\\s*\\n\\s*"), "").trim()
+
+            dbConnectionProvider().use { conn ->
+                val checkSql = "SELECT COUNT(*) FROM bulkletter WHERE TRIM(lettercode) = TRIM(?)"
+                val exists = conn.prepareStatement(checkSql).use { ps ->
+                    ps.setString(1, cleanCode)
+                    ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
+                }
+
+                if (req.mode.equals("ADD", ignoreCase = true)) {
+                    if (exists) {
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            mapOf("error" to "Duplicate Error: Lettercode '$cleanCode' already exists!")
+                        )
+                        return@post
+                    }
+                    val insertSql = """
+                        INSERT INTO bulkletter (lettercode, templete, filenameformat, subject, body, tomail, ccmail, wef, recupdate)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """.trimIndent()
+                    conn.prepareStatement(insertSql).use { ps ->
+                        ps.setString(1, cleanCode)
+                        ps.setString(2, cleanHtml)
+                        ps.setString(3, req.filenameformat)
+                        ps.setString(4, req.subject)
+                        ps.setString(5, req.body)
+                        ps.setString(6, req.tomail)
+                        ps.setString(7, req.ccmail)
+                        ps.setString(8, req.wef)
+                        ps.setString(9, req.recupdate)
+                        ps.executeUpdate()
+                    }
+                } else {
+                    if (!exists) {
+                        call.respond(
+                            HttpStatusCode.NotFound,
+                            mapOf("error" to "Lettercode '$cleanCode' not found! Use Add mode to create.")
+                        )
+                        return@post
+                    }
+                    val updateSql = """
+                        UPDATE bulkletter 
+                        SET templete = ?, filenameformat = ?, subject = ?, body = ?, 
+                            tomail = ?, ccmail = ?, wef = ?, recupdate = ?
+                        WHERE TRIM(lettercode) = TRIM(?)
+                    """.trimIndent()
+                    conn.prepareStatement(updateSql).use { ps ->
+                        ps.setString(1, cleanHtml)
+                        ps.setString(2, req.filenameformat)
+                        ps.setString(3, req.subject)
+                        ps.setString(4, req.body)
+                        ps.setString(5, req.tomail)
+                        ps.setString(6, req.ccmail)
+                        ps.setString(7, req.wef)
+                        ps.setString(8, req.recupdate)
+                        ps.setString(9, cleanCode)
+                        ps.executeUpdate()
+                    }
+                }
+            }
+            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "lettercode" to cleanCode))
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Save failed")))
+        }
+    }
+
+    // 3. GET /api/turso/resolve-mail?code=ADKR2787&rule=ownp,pipe,branch,ADKR1001o
+    get("/api/turso/resolve-mail") {
+        val code = call.request.queryParameters["code"]
+            ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing 'code' parameter"))
+        val rule = call.request.queryParameters["rule"] ?: "owno,ownp"
+
+        try {
+            val result = dbConnectionProvider().use { conn ->
+                BulkLetterService.resolveMailForApi(conn, rule, code)
+            }
+            call.respond(HttpStatusCode.OK, result)
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Failed to resolve email")))
+        }
+    }
+
+    // 4. POST /api/turso/resolve-mail
+    post("/api/turso/resolve-mail") {
+        try {
+            val req = call.receive<ResolveMailRequest>()
+            val result = dbConnectionProvider().use { conn ->
+                BulkLetterService.resolveMailForApi(conn, req.rule, req.code)
+            }
+            call.respond(HttpStatusCode.OK, result)
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Failed to resolve email")))
+        }
+    }
+
+    // 5. POST /api/turso/generateletter (Supports composite lettercode 27 -> 25 & 26 + recupdate history)
     post("/api/turso/generateletter") {
         try {
             val text = call.receiveText()
-            val rows = try {
+            val rawRows = try {
                 lenientJson.decodeFromString<List<BulkLetterRow>>(text)
             } catch (_: Exception) {
                 try {
@@ -526,9 +853,21 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                 }
             }
 
-            if (rows.isEmpty()) {
+            if (rawRows.isEmpty()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "No rows provided"))
                 return@post
+            }
+
+            // Expand composite lettercode "27" into sequential "25" and "26"
+            val rows = rawRows.flatMap { row ->
+                if (row.letter.trim() == "27") {
+                    listOf(
+                        row.copy(letter = "25"),
+                        row.copy(letter = "26")
+                    )
+                } else {
+                    listOf(row)
+                }
             }
 
             val today = LocalDate.now(ZoneId.of("Asia/Kolkata"))
@@ -547,7 +886,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                                 branch = row.dBranch ?: "",
                                 gender = "Male",
                                 doj = "",
-                                dol = row.wef ?: "",
+                                dol = BulkLetterService.formatExcelOrTextDate(row.wef ?: ""),
                                 salary = "",
                                 fatherName = "",
                                 presentAddress = row.address ?: "",
@@ -559,12 +898,17 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             ?: error("Letter template not found in bulkletter table for lettercode: ${row.letter}")
 
                         // Resolve WEF date: CSV row wef > letterConfig.wef > today's date
-                        val resolvedWef = row.wef?.takeIf { it.isNotBlank() }
-                            ?: letterConfig.wef.takeIf { it.isNotBlank() }
-                            ?: today
+                        val resolvedWef = BulkLetterService.formatExcelOrTextDate(
+                            row.wef?.takeIf { it.isNotBlank() }
+                                ?: letterConfig.wef.takeIf { it.isNotBlank() }
+                                ?: today
+                        )
 
-                        // Strict Date of Leaving (dol) validation for clearance/leaving letters (e.g. lettercode == "21" or template needing {9})
-                        val requiresDol = row.letter.trim() == "21" || letterConfig.templete.contains("{9}") || letterConfig.subject.contains("{9}") || letterConfig.body.contains("{9}")
+                        // Strict Date of Leaving (dol) validation for clearance/leaving letters
+                        val requiresDol = row.letter.trim() == "21" ||
+                            letterConfig.templete.contains("{9}") ||
+                            letterConfig.subject.contains("{9}") ||
+                            letterConfig.body.contains("{9}")
                         if (requiresDol && empData.dol.isBlank()) {
                             call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Date of Leaving missing for ${row.code}"))
                             return@post
@@ -594,7 +938,6 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         val safeCode = row.code.ifBlank { "Emp_${index + 1}" }
                             .replace(Regex("[^A-Za-z0-9_-]"), "_")
 
-                        // Dynamic filename formatting from filenameformat
                         val fileNameRaw = letterConfig.filenameformat.takeIf { it.isNotBlank() } ?: "${safeCode}_Letter_${row.letter}"
                         val resolvedFileName = BulkLetterService.applyPlaceholders(
                             fileNameRaw, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
@@ -637,7 +980,20 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             wef = resolvedWef
                         )
 
-                        // 3. Add PDF to ZIP response
+                        // 3. Append {dd-MM-yyyy: recupdate} history into MasterData.coment77_59
+                        if (letterConfig.recupdate.isNotBlank()) {
+                            val resolvedRecUpdate = BulkLetterService.applyPlaceholders(
+                                letterConfig.recupdate, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                            )
+                            BulkLetterService.appendStaffHistoryComment(
+                                conn = conn,
+                                empCode = row.code,
+                                resolvedRecUpdate = resolvedRecUpdate,
+                                todayDate = today
+                            )
+                        }
+
+                        // 4. Add PDF to ZIP response
                         zip.putNextEntry(ZipEntry(resolvedFileName))
                         zip.write(pdfBytes)
                         zip.closeEntry()
@@ -665,7 +1021,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
         }
     }
 
-    // GET /api/turso/letteremails
+    // 6. GET /api/turso/letteremails
     get("/api/turso/letteremails") {
         val conn = dbConnectionProvider()
         try {
@@ -699,7 +1055,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
         }
     }
 
-    // POST /api/turso/sendletteremails
+    // 7. POST /api/turso/sendletteremails
     post("/api/turso/sendletteremails") {
         val errorList = mutableListOf<String>()
         try {
