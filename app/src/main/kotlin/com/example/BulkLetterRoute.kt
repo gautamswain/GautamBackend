@@ -570,7 +570,7 @@ object BulkLetterService {
             conn.prepareStatement(updateSql).use { ps ->
                 ps.setString(1, updatedComment)
                 ps.setString(2, empCode)
-                ps.executeUpdate()
+                ps.execute()
             }
         } catch (e: Exception) {
             println("Warning: Failed to update coment77_59 for $empCode: ${e.message}")
@@ -823,7 +823,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                     fieldValues.values.forEachIndexed { idx, value ->
                         ps.setString(idx + 2, value)
                     }
-                    ps.executeUpdate()
+                    ps.execute()
                 }
             } else {
                 if (!exists) {
@@ -842,7 +842,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         ps.setString(idx + 1, value)
                     }
                     ps.setString(fieldValues.size + 1, cleanCode)
-                    ps.executeUpdate()
+                    ps.execute()
                 }
             }
         }
