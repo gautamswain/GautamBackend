@@ -145,6 +145,7 @@ fun Application.module() {
             }
             matches
         }
+        salarySlipRoutes { TursoDatabaseService.getConnection() ?: throw IllegalStateException("DB connection failed") }
 
         reportMeRouting { TursoDatabaseService.getConnection() }
 
