@@ -738,12 +738,14 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
     val log = call.application.environment.log
     try {
         val rawBody = call.receiveText()
-        log.info("Received /letter-templates/save payload: $rawBody")
-
         val req = lenientJson.decodeFromString<SaveLetterTemplateRequest>(rawBody)
         val cleanCode = req.lettercode.trim()
         if (cleanCode.isBlank()) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Lettercode cannot be empty"))
+            call.respondText(
+                """{"error":"Lettercode cannot be empty"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest
+            )
             return@post
         }
 
@@ -762,8 +764,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         }
                     }
                 }
-            } catch (tableEx: Exception) {
-                log.warn("bulkletter table check failed, creating table: ${tableEx.message}")
+            } catch (_: Exception) {
                 conn.createStatement().use { st ->
                     st.execute(
                         """
@@ -806,9 +807,10 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
             if (req.mode.equals("ADD", ignoreCase = true)) {
                 if (exists) {
-                    call.respond(
-                        HttpStatusCode.Conflict,
-                        mapOf("error" to "Duplicate Error: Lettercode '$cleanCode' already exists!")
+                    call.respondText(
+                        """{"error":"Duplicate Error: Lettercode '$cleanCode' already exists!"}""",
+                        ContentType.Application.Json,
+                        HttpStatusCode.Conflict
                     )
                     return@post
                 }
@@ -825,9 +827,10 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                 }
             } else {
                 if (!exists) {
-                    call.respond(
-                        HttpStatusCode.NotFound,
-                        mapOf("error" to "Lettercode '$cleanCode' not found! Use Add mode to create.")
+                    call.respondText(
+                        """{"error":"Lettercode '$cleanCode' not found! Use Add mode to create."}""",
+                        ContentType.Application.Json,
+                        HttpStatusCode.NotFound
                     )
                     return@post
                 }
@@ -843,13 +846,15 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                 }
             }
         }
-        call.respond(HttpStatusCode.OK, mapOf("status" to "success", "lettercode" to cleanCode))
+
+        val okJson = lenientJson.encodeToString(mapOf("status" to "success", "lettercode" to cleanCode))
+        call.respondText(okJson, ContentType.Application.Json, HttpStatusCode.OK)
     } catch (e: Exception) {
         log.error("FAILED POST /api/turso/letter-templates/save", e)
-        call.respond(
-            HttpStatusCode.InternalServerError,
+        val errJson = lenientJson.encodeToString(
             mapOf("error" to "${e.javaClass.simpleName}: ${e.localizedMessage ?: e.message ?: "Save failed"}")
         )
+        call.respondText(errJson, ContentType.Application.Json, HttpStatusCode.InternalServerError)
     }
 }
 
