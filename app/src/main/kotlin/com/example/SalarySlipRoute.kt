@@ -264,7 +264,7 @@ object SalarySlipGenerator {
                 </table>
 
                 <div class="net-box">
-                    Net Salary :- ₹${formatMoney(netAmount)} &nbsp;&nbsp;&nbsp;(Rupees $netWords Only)
+                    Net Salary :- &#8377;${formatMoney(netAmount)} &#160;&#160;&#160;(Rupees $netWords Only)
                 </div>
 
                 <div class="footer">
@@ -287,7 +287,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                 val sal = SalarySlipGenerator.fetchSalaryRecord(conn, code, month)
                     ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Salary record not found for code: $code"))
                 val master = TursoDatabaseService.getRecordByEmpId(code)
-                val html = SalarySlipGenerator.generateHtml(sal, master)
+                val html = SalarySlipGenerator.generateHtml(sal, master).replace("&nbsp;", "&#160;")
                 call.respondText(html, ContentType.Text.Html, HttpStatusCode.OK)
             }
         } catch (e: Exception) {
@@ -312,7 +312,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                         ?: continue
 
                     val master = TursoDatabaseService.getRecordByEmpId(row.code)
-                    val html = SalarySlipGenerator.generateHtml(sal, master)
+                    val html = SalarySlipGenerator.generateHtml(sal, master).replace("&nbsp;", "&#160;")
 
                     val empName = sal.employeeName3.ifBlank { master?.employeeName ?: row.code }
                         .replace(Regex("[^A-Za-z0-9_-]"), "_")
