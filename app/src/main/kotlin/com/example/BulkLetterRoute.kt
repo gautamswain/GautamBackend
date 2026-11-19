@@ -24,7 +24,8 @@ data class BulkLetterRow(
     val promoTo: String? = null,
     @SerialName("dBranch") val dBranch: String? = null,
     val wef: String? = null,
-    val address: String? = null
+    val address: String? = null,
+    val dol: String? = null
 )
 
 @Serializable
@@ -344,7 +345,10 @@ object BulkLetterService {
         val effectiveBranch = row.dBranch?.takeIf { it.isNotBlank() } ?: emp.branch
         val effectiveAddress = row.address?.takeIf { it.isNotBlank() } ?: emp.presentAddress
         val effectiveDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: emp.designation
-        val effectiveDolOrWef = row.wef?.takeIf { it.isNotBlank() } ?: resolvedWef.takeIf { it.isNotBlank() } ?: emp.dol
+        val effectiveDolOrWef = row.dol?.takeIf { it.isNotBlank() }
+            ?: row.wef?.takeIf { it.isNotBlank() }
+            ?: resolvedWef.takeIf { it.isNotBlank() }
+            ?: emp.dol
 
         val mapper: (String) -> String = if (isEmailField) { { it } } else { { xmlEscape(it) } }
 
@@ -680,6 +684,92 @@ object BulkLetterService {
 
 fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
+    // GET /api/turso/generateletter/preview
+    get("/api/turso/generateletter/preview") {
+        val code = call.request.queryParameters["code"] ?: ""
+        val letter = call.request.queryParameters["letter"] ?: "1"
+        val promoTo = call.request.queryParameters["promoTo"]
+        val dBranch = call.request.queryParameters["dBranch"]
+        val wef = call.request.queryParameters["wef"]
+        val address = call.request.queryParameters["address"]
+        val dol = call.request.queryParameters["dol"]
+
+        if (code.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing code parameter"))
+            return@get
+        }
+
+        try {
+            dbConnectionProvider().use { conn ->
+                val empData = BulkLetterService.fetchEmployeeFromMasterData(conn, code)
+                    ?: MasterEmployeeData(
+                        name = code,
+                        code = code,
+                        department = "",
+                        designation = promoTo ?: "",
+                        branch = dBranch ?: "",
+                        gender = "Male",
+                        doj = "",
+                        dol = dol ?: wef ?: "",
+                        salary = "",
+                        fatherName = "",
+                        presentAddress = address ?: "",
+                        mobileNo = "",
+                        email = ""
+                    )
+
+                val letterConfig = BulkLetterService.fetchLetterConfigFromDb(conn, letter)
+                    ?: error("Letter template not found for lettercode: $letter")
+
+                val row = BulkLetterRow(code = code, letter = letter, promoTo = promoTo, dBranch = dBranch, wef = wef, address = address, dol = dol)
+                val resolvedWef = wef?.takeIf { it.isNotBlank() } ?: letterConfig.wef.takeIf { it.isNotBlank() } ?: LocalDate.now(ZoneId.of("Asia/Kolkata")).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+                val targetDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: empData.designation
+                val probationPeriod = BulkLetterService.fetchProbationDays(conn, targetDesignation)
+                val responsibleBranches = BulkLetterService.fetchResponsibleBranches(conn, code)
+
+                val finalHtmlBody = BulkLetterService.applyPlaceholders(
+                    rawTemplate = letterConfig.templete,
+                    emp = empData,
+                    row = row,
+                    responsibleBranches = responsibleBranches,
+                    probationPeriod = probationPeriod,
+                    resolvedWef = resolvedWef,
+                    isEmailField = false
+                )
+
+                val todayDate = LocalDate.now(ZoneId.of("Asia/Kolkata")).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+                val secretCode = try {
+                    LetterCodeGenerator.generate(code, todayDate).combinedCode
+                } catch (_: Exception) { "" }
+
+                val pdfBytes = LetterPdfService.generateLetterPdf(
+                    formattedHtmlBody = finalHtmlBody,
+                    refNo = "ADH/HR/$code/1",
+                    date = todayDate,
+                    secretCode = secretCode
+                )
+
+                // Return PDF bytes or HTML preview? Requirement says: "Render and return the placeholder-resolved HTML (ContentType.Text.Html)"
+                val previewHtml = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head><meta charset="UTF-8"/><title>Letter Preview</title></head>
+                    <body style="font-family: Arial, sans-serif; padding: 20px;">
+                        ${BrandAssets.renderDocumentHeader("Preview - Letter Code: $letter", secretCode)}
+                        <div style="margin-top: 20px; line-height: 1.6;">
+                            $finalHtmlBody
+                        </div>
+                    </body>
+                    </html>
+                """.trimIndent()
+
+                call.respondText(previewHtml, ContentType.Text.Html, HttpStatusCode.OK)
+            }
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Preview failed")))
+        }
+    }
+
     // GET /api/turso/letter-templates
     get("/api/turso/letter-templates") {
         try {
@@ -953,4 +1043,218 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
             )
         }
     }
+
+    // POST /api/turso/generateletter
+    post("/api/turso/generateletter") {
+        val skippedErrors = mutableListOf<Map<String, String>>()
+        val generatedPdfs = mutableListOf<Pair<String, ByteArray>>()
+
+        try {
+            val text = call.receiveText()
+            val rows = try {
+                lenientJson.decodeFromString<List<BulkLetterRow>>(text)
+            } catch (_: Exception) {
+                try {
+                    lenientJson.decodeFromString<GenerateLetterRequest>(text).rows
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            }
+
+            if (rows.isEmpty()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "No rows provided"))
+                return@post
+            }
+
+            // Expand composite letter code "27" -> "25" and "26"
+            val expandedRows = mutableListOf<BulkLetterRow>()
+            for (row in rows) {
+                if (row.letter.trim() == "27") {
+                    expandedRows.add(row.copy(letter = "25"))
+                    expandedRows.add(row.copy(letter = "26"))
+                } else {
+                    expandedRows.add(row)
+                }
+            }
+
+            val todayDate = LocalDate.now(ZoneId.of("Asia/Kolkata"))
+                .format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+            val ddmmyy = LocalDate.now(ZoneId.of("Asia/Kolkata"))
+                .format(DateTimeFormatter.ofPattern("ddMMyy"))
+
+            dbConnectionProvider().use { conn ->
+                for ((index, row) in expandedRows.withIndex()) {
+                    try {
+                        val empData = BulkLetterService.fetchEmployeeFromMasterData(conn, row.code)
+                            ?: MasterEmployeeData(
+                                name = row.code,
+                                code = row.code,
+                                department = "",
+                                designation = row.promoTo ?: "",
+                                branch = row.dBranch ?: "",
+                                gender = "Male",
+                                doj = "",
+                                dol = row.dol ?: row.wef ?: "",
+                                salary = "",
+                                fatherName = "",
+                                presentAddress = row.address ?: "",
+                                mobileNo = "",
+                                email = ""
+                            )
+
+                        val letterConfig = BulkLetterService.fetchLetterConfigFromDb(conn, row.letter)
+                            ?: error("Letter template not found for lettercode: ${row.letter}")
+
+                        val resolvedWef = row.wef?.takeIf { it.isNotBlank() }
+                            ?: letterConfig.wef.takeIf { it.isNotBlank() }
+                            ?: todayDate
+
+                        val requiresDol = row.letter.trim() == "21" ||
+                            letterConfig.templete.contains("{9}") ||
+                            letterConfig.subject.contains("{9}") ||
+                            letterConfig.body.contains("{9}")
+                        if (requiresDol && empData.dol.isBlank()) {
+                            skippedErrors.add(mapOf("code" to row.code, "letter" to row.letter, "reason" to "Date of Leaving missing"))
+                            continue
+                        }
+
+                        val targetDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: empData.designation
+                        val probationPeriod = BulkLetterService.fetchProbationDays(conn, targetDesignation)
+                        val responsibleBranches = BulkLetterService.fetchResponsibleBranches(conn, row.code)
+
+                        val finalHtmlBody = BulkLetterService.applyPlaceholders(
+                            rawTemplate = letterConfig.templete,
+                            emp = empData,
+                            row = row,
+                            responsibleBranches = responsibleBranches,
+                            probationPeriod = probationPeriod,
+                            resolvedWef = resolvedWef,
+                            isEmailField = false
+                        )
+
+                        val secretCode = try {
+                            LetterCodeGenerator.generate(empData.code, todayDate).combinedCode
+                        } catch (_: Exception) { "" }
+
+                        val pdfBytes = LetterPdfService.generateLetterPdf(
+                            formattedHtmlBody = finalHtmlBody,
+                            refNo = "ADH/HR/${empData.code}/${index + 1}",
+                            date = todayDate,
+                            secretCode = secretCode
+                        )
+
+                        val safeCode = row.code.ifBlank { "Emp_${index + 1}" }
+                            .replace(Regex("[^A-Za-z0-9_-]"), "_")
+
+                        val fileNameRaw = letterConfig.filenameformat.takeIf { it.isNotBlank() } ?: "${safeCode}_Letter_${row.letter}"
+                        val resolvedFileName = BulkLetterService.applyPlaceholders(
+                            fileNameRaw, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                        ).let { if (it.endsWith(".pdf", ignoreCase = true)) it else "$it.pdf" }
+
+                        var attachmentLink = ""
+                        try {
+                            val driveResult = GoogleDriveReportService.uploadStaffFile(
+                                empCode = row.code,
+                                fileName = resolvedFileName,
+                                mimeType = "application/pdf",
+                                bytes = pdfBytes
+                            )
+                            val driveFileId = driveResult["id"].orEmpty()
+                            if (driveFileId.isNotBlank()) {
+                                attachmentLink = "https://drive.google.com/file/d/$driveFileId/view"
+                            }
+                        } catch (_: Exception) {}
+
+                        val resolvedSubject = BulkLetterService.applyPlaceholders(
+                            letterConfig.subject, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                        )
+                        val resolvedBody = BulkLetterService.applyPlaceholders(
+                            letterConfig.body, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                        )
+                        val resolvedToMail = BulkLetterService.resolveEmailField(conn, letterConfig.tomail, empData)
+                        val resolvedCcMail = BulkLetterService.resolveEmailField(conn, letterConfig.ccmail, empData)
+
+                        BulkLetterService.insertLetterEmailRecord(
+                            conn = conn,
+                            code = row.code,
+                            letterCode = letterConfig.lettercode.ifBlank { row.letter },
+                            toMail = resolvedToMail,
+                            ccMail = resolvedCcMail,
+                            subject = resolvedSubject,
+                            body = resolvedBody,
+                            attachmentLink = attachmentLink,
+                            wef = resolvedWef
+                        )
+
+                        if (letterConfig.recupdate.isNotBlank()) {
+                            val resolvedRecUpdate = BulkLetterService.applyPlaceholders(
+                                letterConfig.recupdate, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                            )
+                            BulkLetterService.appendStaffHistoryComment(
+                                conn = conn,
+                                empCode = row.code,
+                                resolvedRecUpdate = resolvedRecUpdate,
+                                todayDate = todayDate
+                            )
+                        }
+
+                        generatedPdfs.add(resolvedFileName to pdfBytes)
+                    } catch (rowEx: Exception) {
+                        skippedErrors.add(mapOf("code" to row.code, "letter" to row.letter, "reason" to (rowEx.message ?: "Processing error")))
+                    }
+                }
+            }
+
+            if (generatedPdfs.isEmpty()) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "No valid letters generated", "skipped" to skippedErrors))
+                return@post
+            }
+
+            if (skippedErrors.isNotEmpty()) {
+                call.response.header("X-Skipped-Rows", lenientJson.encodeToString(skippedErrors))
+            }
+
+            if (generatedPdfs.size == 1) {
+                val (fileName, bytes) = generatedPdfs.first()
+                call.response.header(
+                    HttpHeaders.ContentDisposition,
+                    ContentDisposition.Attachment.withParameter(
+                        ContentDisposition.Parameters.FileName,
+                        fileName
+                    ).toString()
+                )
+                call.respondBytes(bytes, ContentType.Application.Pdf)
+            } else {
+                val zipOut = ByteArrayOutputStream()
+                ZipOutputStream(zipOut).use { zip ->
+                    for ((fileName, bytes) in generatedPdfs) {
+                        zip.putNextEntry(ZipEntry(fileName))
+                        zip.write(bytes)
+                        zip.closeEntry()
+                    }
+                }
+                call.response.header(
+                    HttpHeaders.ContentDisposition,
+                    ContentDisposition.Attachment.withParameter(
+                        ContentDisposition.Parameters.FileName,
+                        "Adhikar_Bulk_Letters.zip"
+                    ).toString()
+                )
+                call.respondBytes(zipOut.toByteArray(), ContentType.Application.Zip)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf(
+                    "error" to (e.localizedMessage ?: e.message ?: "Unknown error"),
+                    "exception" to e.javaClass.simpleName
+                )
+            )
+        }
+    }
+}
+
+private fun effectiveRowPromoTo(row: BulkLetterRow, empData: MasterEmployeeData): String {
+    return row.promoTo?.takeIf { it.isNotBlank() } ?: empData.designation
 }

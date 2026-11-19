@@ -2,15 +2,27 @@ package com.example
 
 import io.ktor.http.*
 import io.ktor.server.application.*
+import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import java.net.HttpURLConnection
 import java.net.URL
 
 private const val MAX_BATCH = 20
+
+@Serializable
+data class SalaryInfoDto(
+    val month: String = "",
+    val totday: String = "30",
+    val sunday: String = "4",
+    val holiday: String = "1",
+    val monthc: String = "",
+    val networkingdays: Int = 25
+)
 
 fun Route.configureSalaryRoutes() {
     get("/api/turso/salaries-batch") {
@@ -40,6 +52,228 @@ fun Route.configureSalaryRoutes() {
             return@get
         }
         call.respond(HttpStatusCode.OK, payload)
+    }
+
+    // 1. GET /api/turso/salaryinfo
+    get("/api/turso/salaryinfo") {
+        val conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@get
+        }
+
+        try {
+            conn.createStatement().use { stmt ->
+                stmt.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS salaryinfo (
+                        month TEXT, 
+                        totday TEXT, 
+                        sunday TEXT, 
+                        holiday TEXT, 
+                        monthc TEXT
+                    );
+                    """.trimIndent()
+                )
+            }
+
+            val list = mutableListOf<SalaryInfoDto>()
+            conn.createStatement().use { stmt ->
+                stmt.executeQuery("SELECT * FROM salaryinfo ORDER BY rowid DESC").use { rs ->
+                    val meta = rs.metaData
+                    val colMap = mutableMapOf<String, Int>()
+                    for (i in 1..meta.columnCount) {
+                        colMap[meta.getColumnName(i).trim().lowercase()] = i
+                    }
+
+                    fun getVal(rs: java.sql.ResultSet, vararg keys: String): String {
+                        for (k in keys) {
+                            val idx = colMap[k.lowercase()]
+                            if (idx != null) {
+                                val v = rs.getString(idx)?.trim().orEmpty()
+                                if (v.isNotBlank()) return v
+                            }
+                        }
+                        return ""
+                    }
+
+                    while (rs.next()) {
+                        val rawMonth = getVal(rs, "month")
+                        val formattedMonth = SalarySlipGenerator.formatMonthName(rawMonth)
+                        val totday = getVal(rs, "totday", "tot_day").ifBlank { "30" }
+                        val sunday = getVal(rs, "sunday").ifBlank { "4" }
+                        val holiday = getVal(rs, "holiday").ifBlank { "1" }
+                        val monthc = getVal(rs, "monthc", "month_c").ifBlank { formattedMonth }
+
+                        val totInt = totday.toIntOrNull() ?: 30
+                        val sunInt = sunday.toIntOrNull() ?: 4
+                        val holInt = holiday.toIntOrNull() ?: 1
+                        val networkingDays = maxOf(0, totInt - (sunInt + holInt))
+
+                        list.add(
+                            SalaryInfoDto(
+                                month = formattedMonth,
+                                totday = totday,
+                                sunday = sunday,
+                                holiday = holiday,
+                                monthc = monthc,
+                                networkingdays = networkingDays
+                            )
+                        )
+                    }
+                }
+            }
+            conn.close()
+            call.respond(HttpStatusCode.OK, list)
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch salary info")))
+        }
+    }
+
+    // 2. GET /api/turso/salaryinfo/{monthc}
+    get("/api/turso/salaryinfo/{monthc}") {
+        val targetMonth = call.parameters["monthc"]?.trim().orEmpty()
+        if (targetMonth.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing monthc parameter"))
+            return@get
+        }
+
+        val conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@get
+        }
+
+        try {
+            val sql = "SELECT * FROM salaryinfo WHERE LOWER(TRIM(monthc)) = LOWER(TRIM(?)) OR LOWER(TRIM(month)) = LOWER(TRIM(?)) LIMIT 1"
+            var foundInfo: SalaryInfoDto? = null
+
+            conn.prepareStatement(sql).use { ps ->
+                ps.setString(1, targetMonth)
+                ps.setString(2, targetMonth)
+                ps.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        val meta = rs.metaData
+                        val colMap = mutableMapOf<String, Int>()
+                        for (i in 1..meta.columnCount) {
+                            colMap[meta.getColumnName(i).trim().lowercase()] = i
+                        }
+
+                        fun getVal(rs: java.sql.ResultSet, vararg keys: String): String {
+                            for (k in keys) {
+                                val idx = colMap[k.lowercase()]
+                                if (idx != null) {
+                                    val v = rs.getString(idx)?.trim().orEmpty()
+                                    if (v.isNotBlank()) return v
+                                }
+                            }
+                            return ""
+                        }
+
+                        val rawMonth = getVal(rs, "month")
+                        val formattedMonth = SalarySlipGenerator.formatMonthName(rawMonth)
+                        val totday = getVal(rs, "totday", "tot_day").ifBlank { "30" }
+                        val sunday = getVal(rs, "sunday").ifBlank { "4" }
+                        val holiday = getVal(rs, "holiday").ifBlank { "1" }
+                        val monthc = getVal(rs, "monthc", "month_c").ifBlank { formattedMonth }
+
+                        val totInt = totday.toIntOrNull() ?: 30
+                        val sunInt = sunday.toIntOrNull() ?: 4
+                        val holInt = holiday.toIntOrNull() ?: 1
+                        val networkingDays = maxOf(0, totInt - (sunInt + holInt))
+
+                        foundInfo = SalaryInfoDto(
+                            month = formattedMonth,
+                            totday = totday,
+                            sunday = sunday,
+                            holiday = holiday,
+                            monthc = monthc,
+                            networkingdays = networkingDays
+                        )
+                    }
+                }
+            }
+            conn.close()
+
+            if (foundInfo != null) {
+                call.respond(HttpStatusCode.OK, foundInfo)
+            } else {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Salary info not found for monthc"))
+            }
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch salary info")))
+        }
+    }
+
+    // 3. POST /api/turso/salaryinfo/save
+    post("/api/turso/salaryinfo/save") {
+        try {
+            val req = call.receive<SalaryInfoDto>()
+            val cleanMonth = req.month.trim()
+            val cleanMonthc = req.monthc.trim()
+
+            if (cleanMonth.isBlank() || cleanMonthc.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Month and monthc cannot be blank"))
+                return@post
+            }
+
+            val formattedMonth = SalarySlipGenerator.formatMonthName(cleanMonth)
+
+            TursoDatabaseService.getConnection()?.use { conn ->
+                conn.createStatement().use { stmt ->
+                    stmt.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS salaryinfo (
+                            month TEXT, 
+                            totday TEXT, 
+                            sunday TEXT, 
+                            holiday TEXT, 
+                            monthc TEXT
+                        );
+                        """.trimIndent()
+                    )
+                }
+
+                val checkSql = "SELECT COUNT(*) FROM salaryinfo WHERE LOWER(TRIM(monthc)) = LOWER(TRIM(?)) OR LOWER(TRIM(month)) = LOWER(TRIM(?))"
+                val exists = conn.prepareStatement(checkSql).use { ps ->
+                    ps.setString(1, cleanMonthc)
+                    ps.setString(2, cleanMonth)
+                    ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
+                }
+
+                if (exists) {
+                    val updateSql = "UPDATE salaryinfo SET month = ?, totday = ?, sunday = ?, holiday = ? WHERE LOWER(TRIM(monthc)) = LOWER(TRIM(?)) OR LOWER(TRIM(month)) = LOWER(TRIM(?))"
+                    conn.prepareStatement(updateSql).use { ps ->
+                        ps.setString(1, formattedMonth)
+                        ps.setString(2, req.totday)
+                        ps.setString(3, req.sunday)
+                        ps.setString(4, req.holiday)
+                        ps.setString(5, cleanMonthc)
+                        ps.setString(6, cleanMonth)
+                        ps.execute()
+                    }
+                } else {
+                    val insertSql = "INSERT INTO salaryinfo (month, totday, sunday, holiday, monthc) VALUES (?, ?, ?, ?, ?)"
+                    conn.prepareStatement(insertSql).use { ps ->
+                        ps.setString(1, formattedMonth)
+                        ps.setString(2, req.totday)
+                        ps.setString(3, req.sunday)
+                        ps.setString(4, req.holiday)
+                        ps.setString(5, cleanMonthc)
+                        ps.execute()
+                    }
+                }
+
+                ReportMeService.triggerAsync()
+            }
+
+            call.respond(HttpStatusCode.OK, mapOf("status" to "success", "message" to "Salary info saved"))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to save salary info")))
+        }
     }
 }
 

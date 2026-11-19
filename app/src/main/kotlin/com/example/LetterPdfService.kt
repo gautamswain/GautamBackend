@@ -28,7 +28,8 @@ object LetterPdfService {
     fun generateLetterPdf(
         formattedHtmlBody: String,
         refNo: String,
-        date: String
+        date: String,
+        secretCode: String = ""
     ): ByteArray {
         var html = this::class.java.classLoader
             .getResource("templates/adhikar_letterhead.html")
@@ -37,12 +38,32 @@ object LetterPdfService {
 
         val bodyWithSign = formattedHtmlBody.replace("{{signBase64}}", signBase64)
 
+        val secretCodeFooter = if (secretCode.isNotBlank()) {
+            val qrUri = BrandAssets.generateQrDataUri(secretCode)
+            val qrImg = if (qrUri.isNotBlank()) """<img src="$qrUri" alt="QR" style="width: 50px; height: 50px;" />""" else ""
+            """
+            <table style="width: 100%; border-collapse: collapse; margin-top: 25px; border-top: 1px solid #222; padding-top: 6px;">
+                <tr>
+                    <td style="width: 75%; vertical-align: middle; border: none; padding: 0;">
+                        <div style="font-size: 9px; color: #6B7280; letter-spacing: 0.6px;">$secretCode</div>
+                    </td>
+                    <td style="width: 25%; text-align: right; vertical-align: middle; border: none; padding: 0;">
+                        $qrImg
+                    </td>
+                </tr>
+            </table>
+            """.trimIndent()
+        } else {
+            ""
+        }
+
         html = html
             .replace("{{logoDataUri}}", BrandAssets.logoDataUri)
             .replace("{{bgBase64}}", bgBase64)
             .replace("{{refNo}}", refNo)
             .replace("{{date}}", date)
             .replace("{{formattedHtmlBody}}", bodyWithSign)
+            .replace("{{secretCodeFooter}}", secretCodeFooter)
 
         val outputStream = ByteArrayOutputStream()
         PdfRendererBuilder()
