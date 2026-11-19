@@ -147,6 +147,7 @@ fun Application.module() {
         }
         salarySlipRoutes { TursoDatabaseService.getConnection() ?: throw IllegalStateException("DB connection failed") }
         authRoutes { TursoDatabaseService.getConnection() ?: throw IllegalStateException("DB connection failed") }
+        adminLoginControlRoutes { TursoDatabaseService.getConnection() ?: throw IllegalStateException("DB connection failed") }
 
         reportMeRouting { TursoDatabaseService.getConnection() }
 

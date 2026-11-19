@@ -33,6 +33,29 @@ data class CheckAccessResponse(
     val reason: String? = null
 )
 
+@Serializable
+data class LoginRecordDto(
+    val entryCode: String,
+    val employeeName: String,
+    val maskedVerifyCode: String,
+    val permissions: String,
+    val veryfynumber: Int
+)
+
+@Serializable
+data class UpdateAccessRequest(
+    val entryCode: String,
+    val permissions: String,
+    val veryfynumber: Int,
+    val newVerifyCode: String? = null
+)
+
+@Serializable
+data class UpdateAccessResponse(
+    val updated: Boolean,
+    val message: String
+)
+
 fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
     post("/api/staff/login") {
         try {
@@ -149,6 +172,113 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
         } catch (e: Exception) {
             e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, CheckAccessResponse(valid = false, reason = (e.localizedMessage ?: "Access check failed")))
+        }
+    }
+}
+
+fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
+    get("/api/staff/login-records") {
+        try {
+            dbConnectionProvider().use { conn ->
+                val records = mutableListOf<LoginRecordDto>()
+                val sql = "SELECT * FROM login"
+                conn.createStatement().use { stmt ->
+                    stmt.executeQuery(sql).use { rs ->
+                        while (rs.next()) {
+                            val entryCode = rs.getString("entrycode")?.trim().orEmpty()
+                            val verifyCode = rs.getString("verifycode")?.trim().orEmpty()
+                            val permissions = rs.getString("permissions")?.trim().orEmpty()
+                            val veryfynumber = rs.getInt("veryfynumber")
+
+                            var empName = entryCode
+                            try {
+                                conn.prepareStatement("SELECT employee_name_3 FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1").use { ps ->
+                                    ps.setString(1, entryCode)
+                                    ps.executeQuery().use { empRs ->
+                                        if (empRs.next()) {
+                                            empName = empRs.getString("employee_name_3")?.trim().orEmpty().ifBlank { entryCode }
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) {}
+
+                            val masked = when {
+                                verifyCode.isBlank() -> "Not Set"
+                                verifyCode.length <= 4 -> "****"
+                                else -> "****" + verifyCode.takeLast(4)
+                            }
+
+                            records.add(
+                                LoginRecordDto(
+                                    entryCode = entryCode,
+                                    employeeName = empName,
+                                    maskedVerifyCode = masked,
+                                    permissions = permissions,
+                                    veryfynumber = veryfynumber
+                                )
+                            )
+                        }
+                    }
+                }
+                call.respond(HttpStatusCode.OK, records)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch login records")))
+        }
+    }
+
+    post("/api/staff/update-access") {
+        try {
+            val req = call.receive<UpdateAccessRequest>()
+            val cleanCode = req.entryCode.trim()
+            if (cleanCode.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Entry code cannot be empty"))
+                return@post
+            }
+            if (req.veryfynumber !in 0..2) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid veryfynumber (must be 0, 1, or 2)"))
+                return@post
+            }
+
+            val normalizedPerms = req.permissions.uppercase().toCharArray().filter { it in 'A'..'Z' }.toSet().sorted().joinToString("")
+            val newCode = req.newVerifyCode?.trim()
+
+            dbConnectionProvider().use { conn ->
+                val checkSql = "SELECT COUNT(*) FROM login WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?))"
+                val exists = conn.prepareStatement(checkSql).use { ps ->
+                    ps.setString(1, cleanCode)
+                    ps.executeQuery().use { rs -> rs.next() && rs.getInt(1) > 0 }
+                }
+
+                if (!exists) {
+                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "Login record not found for entryCode: $cleanCode"))
+                    return@post
+                }
+
+                val updateSql = if (!newCode.isNullOrBlank()) {
+                    "UPDATE login SET permissions = ?, veryfynumber = ?, verifycode = ? WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?))"
+                } else {
+                    "UPDATE login SET permissions = ?, veryfynumber = ? WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?))"
+                }
+
+                conn.prepareStatement(updateSql).use { ps ->
+                    ps.setString(1, normalizedPerms)
+                    ps.setInt(2, req.veryfynumber)
+                    if (!newCode.isNullOrBlank()) {
+                        ps.setString(3, newCode)
+                        ps.setString(4, cleanCode)
+                    } else {
+                        ps.setString(3, cleanCode)
+                    }
+                    ps.execute()
+                }
+
+                call.respond(HttpStatusCode.OK, UpdateAccessResponse(updated = true, message = "Access updated successfully"))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to update access")))
         }
     }
 }
