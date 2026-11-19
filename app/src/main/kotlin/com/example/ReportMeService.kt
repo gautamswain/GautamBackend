@@ -300,14 +300,27 @@ object ReportMeService {
 
         conn.createStatement().use { stmt ->
             try {
-                val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE id = '$safeX'")
-                if (updated == 0) {
-                    stmt.executeUpdate("INSERT INTO reports (id, cr, $fieldName) VALUES ('$safeX', 'm', '$safeY')")
+                var exists = false
+                stmt.executeQuery("SELECT COUNT(*) FROM reports WHERE id = '$safeX'").use { rs ->
+                    if (rs.next()) exists = rs.getInt(1) > 0
+                }
+                if (exists) {
+                    stmt.execute("UPDATE reports SET $fieldName = '$safeY' WHERE id = '$safeX'")
+                } else {
+                    stmt.execute("INSERT INTO reports (id, cr, $fieldName) VALUES ('$safeX', 'm', '$safeY')")
                 }
             } catch (_: Exception) {
-                val updated = stmt.executeUpdate("UPDATE reports SET $fieldName = '$safeY' WHERE slno = '$safeX'")
-                if (updated == 0) {
-                    stmt.executeUpdate("INSERT INTO reports (emp_id, $fieldName) VALUES ('$safeX', '$safeY')")
+                var exists = false
+                try {
+                    stmt.executeQuery("SELECT COUNT(*) FROM reports WHERE slno = '$safeX'").use { rs ->
+                        if (rs.next()) exists = rs.getInt(1) > 0
+                    }
+                } catch (_: Exception) {}
+
+                if (exists) {
+                    stmt.execute("UPDATE reports SET $fieldName = '$safeY' WHERE slno = '$safeX'")
+                } else {
+                    stmt.execute("INSERT INTO reports (emp_id, $fieldName) VALUES ('$safeX', '$safeY')")
                 }
             }
         }

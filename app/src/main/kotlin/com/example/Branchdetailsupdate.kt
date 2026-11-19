@@ -33,6 +33,7 @@ fun Route.branchDetailsUpdateRouting() {
         val multipart = call.receiveMultipart()
         val formatter = DataFormatter()
         val processedResults = mutableListOf<BranchUpdateResult>()
+        var anyUpdated = false
 
         multipart.forEachPart { part ->
             when (part) {
@@ -63,10 +64,8 @@ fun Route.branchDetailsUpdateRouting() {
                         }
                     }
 
-                    // Turso Database Connection 
                     val conn = TursoDatabaseService.getConnection()
 
-                    // ଡାଟାବେସ୍‌ରୁ ସମସ୍ତ ବ୍ରାଞ୍ଚ ନାମ ଫେଚ୍ କରି ମ୍ୟାପ୍ ପ୍ରସ୍ତୁତ କରିବା
                     val dbBranchMap = mutableMapOf<String, String>()
                     if (conn != null) {
                         try {
@@ -106,31 +105,26 @@ fun Route.branchDetailsUpdateRouting() {
                         } else if (conn == null) {
                             updateStatus = "DB Connection Failed"
                         } else {
-                            // କମା ଥିଲେ ଏକାଧିକ କି' (keys) କୁ ଅଲଗା କରିବା (ଯେପରିକି "6,7")
                             val branchKeys = colB.split(",").map { it.trim() }.filter { it.isNotBlank() }
                             val statuses = mutableListOf<String>()
 
                             for (bKey in branchKeys) {
-                                val rawMatchedBranch = oToNMap[bKey] ?: bKey // ଯଦି ମ୍ୟାପ୍ ନଥାଏ ସିଧାସଳଖ ବ୍ୟବହାର କରିବ
+                                val rawMatchedBranch = oToNMap[bKey] ?: bKey
                                 val lookupKey = rawMatchedBranch.lowercase().replace(Regex("[^a-z0-9]"), "")
                                 val exactDbBranch = dbBranchMap[lookupKey] ?: rawMatchedBranch
 
                                 try {
                                     val safeColumn = updatedKField.lowercase().replace(Regex("[^a-z0-9_]"), "")
-                                    val escapedVal = colA.replace("'", "''")
-                                    val escapedBranch = exactDbBranch.replace("'", "''")
+                                    val sql = "UPDATE BranchDetails SET $safeColumn = ? WHERE branchname = ?"
                                     
-                                    val sql = "UPDATE BranchDetails SET $safeColumn = '$escapedVal' WHERE branchname = '$escapedBranch'"
-                                    
-                                    val stmt = conn.createStatement()
-                                    val rowsAffected = stmt.executeUpdate(sql)
-                                    stmt.close()
-
-                                    if (rowsAffected > 0) {
-                                        statuses.add("Updated ($exactDbBranch)")
-                                    } else {
-                                        statuses.add("Not Found ($exactDbBranch)")
+                                    conn.prepareStatement(sql).use { ps ->
+                                        ps.setString(1, colA)
+                                        ps.setString(2, exactDbBranch)
+                                        ps.execute()
                                     }
+
+                                    statuses.add("Updated ($exactDbBranch)")
+                                    anyUpdated = true
                                 } catch (e: Exception) {
                                     statuses.add("Error: ${e.javaClass.simpleName}")
                                 }
@@ -156,6 +150,10 @@ fun Route.branchDetailsUpdateRouting() {
                 else -> {}
             }
             part.dispose()
+        }
+
+        if (anyUpdated) {
+            ReportMeService.triggerAsync()
         }
 
         call.respond(HttpStatusCode.OK, BranchUpdateResponse(status = "success", data = processedResults))

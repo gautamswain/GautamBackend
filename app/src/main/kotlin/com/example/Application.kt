@@ -537,13 +537,13 @@ fun Application.module() {
                         ps.setString(2, req.samplePrompt)
                         ps.setString(3, req.expectedTemplate)
                         ps.setString(4, java.time.LocalDateTime.now().toString())
-                        ps.executeUpdate()
+                        ps.execute()
                     }
 
                     if (req.logId != null) {
                         c.prepareStatement("UPDATE ai_interaction_logs SET status = 'RESOLVED' WHERE id = ?").use { ps ->
                             ps.setInt(1, req.logId)
-                            ps.executeUpdate()
+                            ps.execute()
                         }
                     }
                 }

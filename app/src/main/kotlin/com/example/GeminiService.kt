@@ -487,7 +487,7 @@ object GeminiService {
                     ps.setString(3, finalResponse.letterDraft?.letterType ?: "GENERAL_CHAT")
                     ps.setString(4, "SUCCESS")
                     ps.setString(5, java.time.LocalDateTime.now().toString())
-                    ps.executeUpdate()
+                    ps.execute()
                 }
             }
         } catch (_: Exception) {}
