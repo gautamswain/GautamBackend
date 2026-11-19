@@ -5,26 +5,25 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.sql.Connection
 
 @Serializable
 data class LoginRequest(
-    val entryCode: String = ""
+    val entrycode: String = ""
 )
 
 @Serializable
 data class LoginResponse(
     val allowed: Boolean,
-    val verifyCode: String? = null,
+    val verifycode: String? = null,
     val permissions: String? = null,
     val reason: String? = null
 )
 
 @Serializable
 data class CheckAccessRequest(
-    val verifyCode: String = ""
+    val verifycode: String = ""
 )
 
 @Serializable
@@ -36,19 +35,19 @@ data class CheckAccessResponse(
 
 @Serializable
 data class LoginRecordDto(
-    @SerialName("entrycode") val entrycode: String = "",
-    @SerialName("employeename") val employeename: String = "",
-    @SerialName("verifycode") val verifycode: String = "",
-    @SerialName("permissions") val permissions: String = "",
-    @SerialName("veryfynumber") val veryfynumber: Int = 0
+    val entrycode: String = "",
+    val employeename: String = "",
+    val verifycode: String = "",
+    val permissions: String = "",
+    val veryfynumber: Int = 0
 )
 
 @Serializable
 data class UpdateAccessRequest(
-    @SerialName("entrycode") val entrycode: String = "",
-    @SerialName("permissions") val permissions: String = "",
-    @SerialName("veryfynumber") val veryfynumber: Int = 0,
-    @SerialName("verifycode") val verifycode: String? = null
+    val entrycode: String = "",
+    val permissions: String = "",
+    val veryfynumber: Int = 0,
+    val verifycode: String = ""
 )
 
 @Serializable
@@ -61,28 +60,15 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
     post("/api/staff/login") {
         try {
             val req = call.receive<LoginRequest>()
-            val code = req.entryCode.trim()
+            val code = req.entrycode.trim().lowercase()
             if (code.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Entry code cannot be empty"))
                 return@post
             }
 
             dbConnectionProvider().use { conn ->
-                try {
-                    conn.createStatement().use { stmt ->
-                        stmt.execute("""
-                            CREATE TABLE IF NOT EXISTS login (
-                                entrycode TEXT,
-                                verifycode TEXT,
-                                permissions TEXT,
-                                veryfynumber INTEGER DEFAULT 0
-                            );
-                        """.trimIndent())
-                    }
-                } catch (_: Exception) {}
-
-                val selectSql = "SELECT entrycode, verifycode, permissions, veryfynumber FROM login WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?)) LIMIT 1"
-                var verifyCode = ""
+                val selectSql = "SELECT entrycode, verifycode, permissions, veryfynumber FROM login WHERE LOWER(TRIM(entrycode)) = ? LIMIT 1"
+                var verifycode = ""
                 var permissions = ""
                 var veryfynumber = 0
                 var found = false
@@ -92,8 +78,8 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
                     ps.executeQuery().use { rs ->
                         if (rs.next()) {
                             found = true
-                            verifyCode = rs.getString("verifycode")?.trim().orEmpty()
-                            permissions = rs.getString("permissions")?.trim().orEmpty()
+                            verifycode = rs.getString("verifycode")?.trim()?.lowercase().orEmpty()
+                            permissions = rs.getString("permissions")?.trim()?.lowercase().orEmpty()
                             veryfynumber = rs.getInt("veryfynumber")
                         }
                     }
@@ -106,34 +92,25 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
 
                 when (veryfynumber) {
                     0 -> {
-                        val updateSql = "UPDATE login SET veryfynumber = 1 WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?))"
-                        conn.prepareStatement(updateSql).use { ps ->
+                        conn.prepareStatement("UPDATE login SET veryfynumber = 1 WHERE LOWER(TRIM(entrycode)) = ?").use { ps ->
                             ps.setString(1, code)
                             ps.execute()
                         }
-                        call.respond(HttpStatusCode.OK, LoginResponse(allowed = true, verifyCode = verifyCode, permissions = permissions))
+                        call.respond(HttpStatusCode.OK, LoginResponse(allowed = true, verifycode = verifycode, permissions = permissions))
                     }
                     1 -> {
-                        val updateSql = "UPDATE login SET veryfynumber = 2 WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?))"
-                        conn.prepareStatement(updateSql).use { ps ->
+                        conn.prepareStatement("UPDATE login SET veryfynumber = 2 WHERE LOWER(TRIM(entrycode)) = ?").use { ps ->
                             ps.setString(1, code)
                             ps.execute()
                         }
-                        call.respond(
-                            HttpStatusCode.Forbidden,
-                            LoginResponse(allowed = false, reason = "Code already active on another device. Locked (Status 2).")
-                        )
+                        call.respond(HttpStatusCode.Forbidden, LoginResponse(allowed = false, reason = "Code already active on another device. Locked (Status 2)."))
                     }
                     else -> {
-                        call.respond(
-                            HttpStatusCode.Forbidden,
-                            LoginResponse(allowed = false, reason = "Access blocked by Admin (Status 2).")
-                        )
+                        call.respond(HttpStatusCode.Forbidden, LoginResponse(allowed = false, reason = "Access blocked by Admin (Status 2)."))
                     }
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Login failed")))
         }
     }
@@ -141,24 +118,24 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
     post("/api/staff/check-access") {
         try {
             val req = call.receive<CheckAccessRequest>()
-            val vCode = req.verifyCode.trim()
-            if (vCode.isBlank()) {
+            val vcode = req.verifycode.trim().lowercase()
+            if (vcode.isBlank()) {
                 call.respond(HttpStatusCode.Forbidden, CheckAccessResponse(valid = false, reason = "Session revoked or inactive."))
                 return@post
             }
 
             dbConnectionProvider().use { conn ->
-                val selectSql = "SELECT verifycode, permissions, veryfynumber FROM login WHERE UPPER(TRIM(verifycode)) = UPPER(TRIM(?)) LIMIT 1"
+                val selectSql = "SELECT permissions, veryfynumber FROM login WHERE LOWER(TRIM(verifycode)) = ? LIMIT 1"
                 var permissions = ""
                 var veryfynumber = -1
                 var found = false
 
                 conn.prepareStatement(selectSql).use { ps ->
-                    ps.setString(1, vCode)
+                    ps.setString(1, vcode)
                     ps.executeQuery().use { rs ->
                         if (rs.next()) {
                             found = true
-                            permissions = rs.getString("permissions")?.trim().orEmpty()
+                            permissions = rs.getString("permissions")?.trim()?.lowercase().orEmpty()
                             veryfynumber = rs.getInt("veryfynumber")
                         }
                     }
@@ -171,7 +148,6 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, CheckAccessResponse(valid = false, reason = (e.localizedMessage ?: "Access check failed")))
         }
     }
@@ -182,38 +158,31 @@ fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
         try {
             dbConnectionProvider().use { conn ->
                 val records = mutableListOf<LoginRecordDto>()
-                val sql = "SELECT * FROM login"
                 conn.createStatement().use { stmt ->
-                    stmt.executeQuery(sql).use { rs ->
+                    stmt.executeQuery("SELECT * FROM login").use { rs ->
                         while (rs.next()) {
-                            val entryCode = rs.getString("entrycode")?.trim().orEmpty()
-                            val verifyCode = rs.getString("verifycode")?.trim().orEmpty()
-                            val permissions = rs.getString("permissions")?.trim().orEmpty()
+                            val entrycode = rs.getString("entrycode")?.trim()?.lowercase().orEmpty()
+                            val verifycode = rs.getString("verifycode")?.trim()?.lowercase().orEmpty()
+                            val permissions = rs.getString("permissions")?.trim()?.lowercase().orEmpty()
                             val veryfynumber = rs.getInt("veryfynumber")
 
-                            var empName = entryCode
+                            var employeename = entrycode
                             try {
-                                conn.prepareStatement("SELECT employee_name_3 FROM MasterData WHERE UPPER(TRIM(Code_2)) = UPPER(TRIM(?)) LIMIT 1").use { ps ->
-                                    ps.setString(1, entryCode)
+                                conn.prepareStatement("SELECT employee_name_3 FROM MasterData WHERE LOWER(TRIM(Code_2)) = ? LIMIT 1").use { ps ->
+                                    ps.setString(1, entrycode)
                                     ps.executeQuery().use { empRs ->
                                         if (empRs.next()) {
-                                            empName = empRs.getString("employee_name_3")?.trim().orEmpty().ifBlank { entryCode }
+                                            employeename = empRs.getString("employee_name_3")?.trim()?.lowercase().orEmpty().ifBlank { entrycode }
                                         }
                                     }
                                 }
                             } catch (_: Exception) {}
 
-                            val masked = when {
-                                verifyCode.isBlank() -> "Not Set"
-                                verifyCode.length <= 4 -> "****"
-                                else -> "****" + verifyCode.takeLast(4)
-                            }
-
                             records.add(
                                 LoginRecordDto(
-                                    entrycode = entryCode,
-                                    employeename = empName,
-                                    verifycode = masked,
+                                    entrycode = entrycode,
+                                    employeename = employeename,
+                                    verifycode = verifycode,
                                     permissions = permissions,
                                     veryfynumber = veryfynumber
                                 )
@@ -224,7 +193,6 @@ fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
                 call.respond(HttpStatusCode.OK, records)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch login records")))
         }
     }
@@ -232,53 +200,27 @@ fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
     post("/api/staff/update-access") {
         try {
             val req = call.receive<UpdateAccessRequest>()
-            val cleanCode = req.entrycode.trim()
-            if (cleanCode.isBlank()) {
+            val entrycode = req.entrycode.trim().lowercase()
+            if (entrycode.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Entry code cannot be empty"))
                 return@post
             }
-            if (req.veryfynumber !in 0..2) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid veryfynumber (must be 0, 1, or 2)"))
-                return@post
-            }
 
-            val normalizedPerms = req.permissions.uppercase().toCharArray().filter { it in 'A'..'Z' }.toSet().sorted().joinToString("")
-            val newVerifyCode = req.verifycode?.trim()
+            val permissions = req.permissions.trim().lowercase()
+            val verifycode = req.verifycode.trim().lowercase()
 
             dbConnectionProvider().use { conn ->
-                var existingVerifyCode = ""
-                val selectSql = "SELECT verifycode FROM login WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?)) LIMIT 1"
-                conn.prepareStatement(selectSql).use { ps ->
-                    ps.setString(1, cleanCode)
-                    ps.executeQuery().use { rs ->
-                        if (rs.next()) {
-                            existingVerifyCode = rs.getString("verifycode")?.trim().orEmpty()
-                        } else {
-                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Login record not found for entrycode: $cleanCode"))
-                            return@post
-                        }
-                    }
-                }
-
-                val finalVerifyCode = if (newVerifyCode.isNullOrBlank() || newVerifyCode.startsWith("****")) {
-                    existingVerifyCode
-                } else {
-                    newVerifyCode
-                }
-
-                val updateSql = "UPDATE login SET permissions = ?, veryfynumber = ?, verifycode = ? WHERE UPPER(TRIM(entrycode)) = UPPER(TRIM(?))"
+                val updateSql = "UPDATE login SET permissions = ?, veryfynumber = ?, verifycode = ? WHERE LOWER(TRIM(entrycode)) = ?"
                 conn.prepareStatement(updateSql).use { ps ->
-                    ps.setString(1, normalizedPerms)
+                    ps.setString(1, permissions)
                     ps.setInt(2, req.veryfynumber)
-                    ps.setString(3, finalVerifyCode)
-                    ps.setString(4, cleanCode)
+                    ps.setString(3, verifycode)
+                    ps.setString(4, entrycode)
                     ps.execute()
                 }
-
                 call.respond(HttpStatusCode.OK, UpdateAccessResponse(updated = true, message = "Access updated successfully"))
             }
         } catch (e: Exception) {
-            e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to update access")))
         }
     }
