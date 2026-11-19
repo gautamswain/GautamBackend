@@ -21,7 +21,7 @@ object BrandAssets {
 
     fun renderDocumentHeader(documentTitle: String, secretCode: String = ""): String {
         val secretHtml = if (secretCode.isNotBlank()) {
-            """<div style="text-align: right; font-size: 9px; color: #6B7280; letter-spacing: 0.6px; margin-bottom: 4px;">Verification Code: $secretCode</div>"""
+            """<div style="text-align: right; font-size: 9px; color: #6B7280; letter-spacing: 0.6px; margin-bottom: 4px;">$secretCode</div>"""
         } else {
             ""
         }
@@ -29,7 +29,7 @@ object BrandAssets {
         val logoImg = if (logoDataUri.isNotBlank()) {
             """<img src="$logoDataUri" alt="Adhikar Logo" style="height: 44px; width: auto;" />"""
         } else {
-            """<span style="font-size: 16px; font-weight: bold; color: #E65100;">ADHIKAR</span>"""
+            """<span style="font-size: 16px; font-weight: bold; color: #E65100;">Adhikar Finance</span>"""
         }
 
         return """
@@ -40,7 +40,7 @@ object BrandAssets {
                         $logoImg
                     </td>
                     <td style="width: 75%; text-align: right; vertical-align: middle; border: none; padding: 0;">
-                        <div style="font-size: 15px; font-weight: bold; color: #E65100; margin: 0;">ADHIKAR MICROFINANCE PVT. LTD.</div>
+                        <div style="font-size: 15px; font-weight: bold; color: #E65100; margin: 0;">Adhikar Finance</div>
                         <div style="font-size: 9px; color: #4B5563; margin: 3px 0 0 0;">Plot No. 77/180/970, Subudhipur, Tamando, Kalinga Vihar, Bhubaneswar-751028, Odisha</div>
                     </td>
                 </tr>

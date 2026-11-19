@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
 import java.io.ByteArrayOutputStream
 import java.sql.Connection
 import java.text.DecimalFormat
+import java.time.LocalDate
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -64,7 +65,7 @@ object SalarySlipGenerator {
                     "Sep" to "September", "Oct" to "October", "Nov" to "November", "Dec" to "December"
                 )
                 val monStr = parts.getOrNull(1) ?: ""
-                val yearStr = parts.getOrNull(3) ?: java.time.LocalDate.now().year.toString()
+                val yearStr = parts.getOrNull(3) ?: LocalDate.now().year.toString()
                 val fullMonth = monthMap[monStr] ?: monStr
                 return "$fullMonth-$yearStr"
             } catch (_: Exception) {}
@@ -73,7 +74,7 @@ object SalarySlipGenerator {
         val serial = clean.toDoubleOrNull()?.toLong()
         if (serial != null && serial in 10000L..90000L) {
             try {
-                val date = java.time.LocalDate.of(1899, 12, 30).plusDays(serial)
+                val date = LocalDate.of(1899, 12, 30).plusDays(serial)
                 return date.format(java.time.format.DateTimeFormatter.ofPattern("MMMM-yyyy", java.util.Locale.ENGLISH))
             } catch (_: Exception) {}
         }
@@ -87,7 +88,7 @@ object SalarySlipGenerator {
         )
         for (fmt in formats) {
             try {
-                val parsed = java.time.LocalDate.parse(clean, fmt)
+                val parsed = LocalDate.parse(clean, fmt)
                 return parsed.format(java.time.format.DateTimeFormatter.ofPattern("MMMM-yyyy", java.util.Locale.ENGLISH))
             } catch (_: Exception) {}
         }
@@ -97,17 +98,22 @@ object SalarySlipGenerator {
 
     fun generateSecretCode(empCode: String, month: String, netPay: Double): String {
         try {
-            val input = "$empCode-$month-$netPay-ADHIKAR-2026"
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
-            val hashBytes = digest.digest(input.toByteArray(Charsets.UTF_8))
-            val sb = StringBuilder()
-            for (b in hashBytes) {
-                val charCode = 'a'.code + (Math.abs(b.toInt()) % 26)
-                sb.append(charCode.toChar())
-            }
-            return sb.toString().take(13)
+            val codeForGen = if (empCode.any { it.isDigit() }) empCode else "ADKR0001"
+            return LetterCodeGenerator.generate(employeeCode = codeForGen, dateInput = LocalDate.now().toString()).combinedCode
         } catch (_: Exception) {
-            return "aukuknzachkut"
+            try {
+                val input = "$empCode-$month-$netPay-ADHIKAR-2026"
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                val hashBytes = digest.digest(input.toByteArray(Charsets.UTF_8))
+                val sb = StringBuilder()
+                for (b in hashBytes) {
+                    val charCode = 'a'.code + (Math.abs(b.toInt()) % 26)
+                    sb.append(charCode.toChar())
+                }
+                return sb.toString().take(13)
+            } catch (_: Exception) {
+                return "aukuknzachkut"
+            }
         }
     }
 
@@ -172,7 +178,8 @@ object SalarySlipGenerator {
     fun generateHtml(sal: SalaryDto, master: MasterDataDto?): String {
         val formattedMonth = formatMonthName(sal.month)
         val empName = xmlEscape(sal.employeeName3.ifBlank { master?.employeeName ?: sal.empId2 })
-        val empCode = xmlEscape(sal.empId2.ifBlank { master?.empId ?: sal.id })
+        val rawEmpCode = sal.empId2.ifBlank { master?.empId ?: sal.id }
+        val empCode = xmlEscape(rawEmpCode)
         val designation = xmlEscape(sal.designation7.ifBlank { master?.designation ?: "" })
         val department = xmlEscape(sal.department8.ifBlank { master?.department ?: "" })
         val branch = xmlEscape(sal.branchName9.ifBlank { master?.branchName ?: "" })
@@ -221,7 +228,7 @@ object SalarySlipGenerator {
         val grossDeductions = sal.grossDeductions29.toDoubleOrNull() ?: validDeductions.sumOf { it.amount }
         val netAmount = sal.netAmount30.toDoubleOrNull() ?: (grossEarnings - grossDeductions)
 
-        val secretCode = generateSecretCode(empCode, formattedMonth, netAmount)
+        val secretCode = generateSecretCode(rawEmpCode, formattedMonth, netAmount)
         val documentHeaderHtml = BrandAssets.renderDocumentHeader("Salary Slip for the Month Of $formattedMonth", secretCode)
 
         val maxRows = maxOf(validEarnings.size, validDeductions.size)
@@ -365,7 +372,7 @@ object SalarySlipGenerator {
                 </div>
 
                 <div class="footer-container">
-                    <span class="bottom-secret">Verification Code: $secretCode</span>
+                    <span class="bottom-secret">$secretCode</span>
                     <div class="footer">This is a computer generated statement and does not require any signature or stamp.</div>
                 </div>
             </body>
@@ -489,7 +496,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                         "Salary_Slips.zip"
                     ).toString()
                 )
-                call.respondBytes(zipStream.toByteArray(), ContentType.Application.Zip)
+                call.respondBytes(zipStream.toByteArray(), ContentType.Application.Pdf)
             }
         } catch (e: Exception) {
             e.printStackTrace()
