@@ -43,6 +43,74 @@ object SalarySlipGenerator {
                   .replace(">", "&gt;")
     }
 
+    private fun cleanField(raw: String?): String {
+        val s = raw?.trim().orEmpty()
+        if (s.isBlank() || s.equals("null", ignoreCase = true) || s.equals("n/a", ignoreCase = true) || s.equals("na", ignoreCase = true) || s == "-" || s == "0") {
+            return ""
+        }
+        return s
+    }
+
+    fun formatMonthName(rawMonth: String): String {
+        val clean = rawMonth.trim()
+        if (clean.isBlank()) return "Current Month"
+
+        if (clean.contains("GMT") || clean.contains("UTC") || clean.length > 20) {
+            try {
+                val parts = clean.split(" ")
+                val monthMap = mapOf(
+                    "Jan" to "January", "Feb" to "February", "Mar" to "March", "Apr" to "April",
+                    "May" to "May", "Jun" to "June", "Jul" to "July", "Aug" to "August",
+                    "Sep" to "September", "Oct" to "October", "Nov" to "November", "Dec" to "December"
+                )
+                val monStr = parts.getOrNull(1) ?: ""
+                val yearStr = parts.getOrNull(3) ?: java.time.LocalDate.now().year.toString()
+                val fullMonth = monthMap[monStr] ?: monStr
+                return "$fullMonth-$yearStr"
+            } catch (_: Exception) {}
+        }
+
+        val serial = clean.toDoubleOrNull()?.toLong()
+        if (serial != null && serial in 10000L..90000L) {
+            try {
+                val date = java.time.LocalDate.of(1899, 12, 30).plusDays(serial)
+                return date.format(java.time.format.DateTimeFormatter.ofPattern("MMMM-yyyy", java.util.Locale.ENGLISH))
+            } catch (_: Exception) {}
+        }
+
+        val formats = listOf(
+            java.time.format.DateTimeFormatter.ofPattern("MMMM-yyyy", java.util.Locale.ENGLISH),
+            java.time.format.DateTimeFormatter.ofPattern("MMM-yyyy", java.util.Locale.ENGLISH),
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"),
+            java.time.format.DateTimeFormatter.ofPattern("MM-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy")
+        )
+        for (fmt in formats) {
+            try {
+                val parsed = java.time.LocalDate.parse(clean, fmt)
+                return parsed.format(java.time.format.DateTimeFormatter.ofPattern("MMMM-yyyy", java.util.Locale.ENGLISH))
+            } catch (_: Exception) {}
+        }
+
+        return clean
+    }
+
+    fun generateSecretCode(empCode: String, month: String, netPay: Double): String {
+        try {
+            val input = "$empCode-$month-$netPay-ADHIKAR-2026"
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(input.toByteArray(Charsets.UTF_8))
+            val sb = StringBuilder()
+            for (b in hashBytes) {
+                val charCode = 'a'.code + (Math.abs(b.toInt()) % 26)
+                sb.append(charCode.toChar())
+            }
+            return sb.toString().take(13)
+        } catch (_: Exception) {
+            return "aukuknzachkut"
+        }
+    }
+
     fun numberToWords(amount: Double): String {
         val n = amount.toLong()
         if (n == 0L) return "Zero"
@@ -58,7 +126,7 @@ object SalarySlipGenerator {
             }
 
             return if (num > 99) {
-                units[num / 100] + " Hundred" + (if (num % 100 > 0) " and " + current else "")
+                units[num / 100] + " Hundred" + if (num % 100 > 0) " and " + current else ""
             } else {
                 current
             }
@@ -102,7 +170,7 @@ object SalarySlipGenerator {
     }
 
     fun generateHtml(sal: SalaryDto, master: MasterDataDto?): String {
-        val monthName = xmlEscape(sal.month.ifBlank { "Current Month" })
+        val formattedMonth = formatMonthName(sal.month)
         val empName = xmlEscape(sal.employeeName3.ifBlank { master?.employeeName ?: sal.empId2 })
         val empCode = xmlEscape(sal.empId2.ifBlank { master?.empId ?: sal.id })
         val designation = xmlEscape(sal.designation7.ifBlank { master?.designation ?: "" })
@@ -116,6 +184,9 @@ object SalarySlipGenerator {
         val dob = xmlEscape(DateUtils.toDisplayDate(master?.dob.orEmpty()))
         val gender = xmlEscape(master?.gender.orEmpty())
         val pan = xmlEscape(master?.panCardNo.orEmpty())
+
+        val uan = cleanField(master?.epfUanNo)
+        val esi = cleanField(master?.esiNo)
 
         val rawEarnings = listOf(
             SalaryHead("Basic + DA", sal.basicDa9.toDoubleOrNull() ?: 0.0),
@@ -150,6 +221,9 @@ object SalarySlipGenerator {
         val grossDeductions = sal.grossDeductions29.toDoubleOrNull() ?: validDeductions.sumOf { it.amount }
         val netAmount = sal.netAmount30.toDoubleOrNull() ?: (grossEarnings - grossDeductions)
 
+        val secretCode = generateSecretCode(empCode, formattedMonth, netAmount)
+        val documentHeaderHtml = BrandAssets.renderDocumentHeader("Salary Slip for the Month Of $formattedMonth", secretCode)
+
         val maxRows = maxOf(validEarnings.size, validDeductions.size)
         val rowsHtml = StringBuilder()
 
@@ -174,35 +248,57 @@ object SalarySlipGenerator {
 
         val netWords = numberToWords(netAmount)
 
+        val uanEsiRow = when {
+            uan.isNotBlank() && esi.isNotBlank() -> """
+                <tr>
+                    <td class="label">UAN No.</td>
+                    <td>${xmlEscape(uan)}</td>
+                    <td class="label">ESI No.</td>
+                    <td>${xmlEscape(esi)}</td>
+                </tr>
+            """.trimIndent()
+            uan.isNotBlank() -> """
+                <tr>
+                    <td class="label">UAN No.</td>
+                    <td>${xmlEscape(uan)}</td>
+                    <td class="label"></td>
+                    <td></td>
+                </tr>
+            """.trimIndent()
+            esi.isNotBlank() -> """
+                <tr>
+                    <td class="label">ESI No.</td>
+                    <td>${xmlEscape(esi)}</td>
+                    <td class="label"></td>
+                    <td></td>
+                </tr>
+            """.trimIndent()
+            else -> ""
+        }
+
         return """
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="UTF-8"/>
                 <style>
-                    body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11px; color: #222; margin: 0; padding: 15px; }
-                    .header { text-align: center; border-bottom: 2px solid #003366; padding-bottom: 8px; margin-bottom: 12px; }
-                    .company-name { font-size: 16px; font-weight: bold; color: #003366; margin: 0; }
-                    .company-address { font-size: 9px; color: #555; margin: 3px 0; }
-                    .slip-title { font-size: 13px; font-weight: bold; background: #003366; color: #fff; padding: 4px; margin-top: 8px; }
+                    body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11px; color: #1F2937; margin: 0; padding: 15px; }
                     .grid { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-                    .grid td { padding: 4px 6px; border: 1px solid #ccc; font-size: 10px; width: 25%; }
-                    .grid td.label { font-weight: bold; background: #f0f4f8; color: #333; }
+                    .grid td { padding: 4px 6px; border: 1px solid #D1D5DB; font-size: 10px; width: 25%; }
+                    .grid td.label { font-weight: bold; background: #FFF3E0; color: #1F2937; }
                     .table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-                    .table th, .table td { border: 1px solid #ccc; padding: 5px 8px; font-size: 10px; }
-                    .table th { background: #003366; color: #fff; text-align: left; }
+                    .table th, .table td { border: 1px solid #D1D5DB; padding: 5px 8px; font-size: 10px; }
+                    .table th { background: #FFF3E0; color: #E65100; text-align: left; font-weight: bold; border-bottom: 2px solid #E65100; }
                     .text-right { text-align: right; }
-                    .total-row { font-weight: bold; background: #eef2f7; }
-                    .net-box { border: 2px solid #003366; padding: 6px; background: #f9fbff; font-weight: bold; font-size: 11px; margin-top: 10px; }
-                    .footer { text-align: center; font-size: 9px; color: #666; margin-top: 25px; border-top: 1px solid #ddd; padding-top: 6px; }
+                    .total-row { font-weight: bold; background: #FFF3E0; color: #1F2937; }
+                    .net-box { border: 2px solid #E65100; padding: 8px; background: #FFF3E0; font-weight: bold; font-size: 11px; margin-top: 10px; color: #1F2937; }
+                    .footer-container { margin-top: 25px; border-top: 1px solid #D1D5DB; padding-top: 6px; }
+                    .footer { text-align: center; font-size: 9px; color: #4B5563; }
+                    .bottom-secret { font-size: 9px; color: #6B7280; letter-spacing: 0.5px; float: left; }
                 </style>
             </head>
             <body>
-                <div class="header">
-                    <div class="company-name">ADHIKAR MICROFINANCE PVT. LTD.</div>
-                    <div class="company-address">Plot No. 77/180/970, Subudhipur, Tamando, Kalinga Vihar, Bhubaneswar-751028, Odisha</div>
-                    <div class="slip-title">Salary Slip for the Month Of $monthName</div>
-                </div>
+                $documentHeaderHtml
 
                 <table class="grid">
                     <tr>
@@ -241,15 +337,16 @@ object SalarySlipGenerator {
                         <td class="label">Date of Birth / Gender</td>
                         <td>$dob / $gender</td>
                     </tr>
+                    $uanEsiRow
                 </table>
 
                 <table class="table">
                     <thead>
                         <tr>
                             <th>Earnings</th>
-                            <th class="text-right">Amount (₹)</th>
+                            <th class="text-right">Amount (Rs.)</th>
                             <th>Deductions</th>
-                            <th class="text-right">Amount (₹)</th>
+                            <th class="text-right">Amount (Rs.)</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -264,11 +361,12 @@ object SalarySlipGenerator {
                 </table>
 
                 <div class="net-box">
-                    Net Salary :- &#8377;${formatMoney(netAmount)} &#160;&#160;&#160;(Rupees $netWords Only)
+                    Net Salary :- Rs. ${formatMoney(netAmount)} &#160;&#160;&#160;(Rupees $netWords Only)
                 </div>
 
-                <div class="footer">
-                    This is a computer generated statement and does not require any signature or stamp.
+                <div class="footer-container">
+                    <span class="bottom-secret">Verification Code: $secretCode</span>
+                    <div class="footer">This is a computer generated statement and does not require any signature or stamp.</div>
                 </div>
             </body>
             </html>
@@ -314,11 +412,10 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                     val master = TursoDatabaseService.getRecordByEmpId(row.code)
                     val html = SalarySlipGenerator.generateHtml(sal, master).replace("&nbsp;", "&#160;")
 
-                    val empName = sal.employeeName3.ifBlank { master?.employeeName ?: row.code }
-                        .replace(Regex("[^A-Za-z0-9_-]"), "_")
                     val safeCode = row.code.replace(Regex("[^A-Za-z0-9_-]"), "_")
-                    val monthStr = (row.month.ifBlank { sal.month }).replace(Regex("[^A-Za-z0-9_-]"), "_")
-                    val fileName = "Salary Slip_${empName}_${safeCode}_${monthStr}.pdf"
+                    val formattedMonth = SalarySlipGenerator.formatMonthName(row.month.ifBlank { sal.month })
+                    val monthStr = formattedMonth.replace(Regex("[^A-Za-z0-9_-]"), "_")
+                    val fileName = "Salary_Slip_${safeCode}_${monthStr}.pdf"
 
                     val pdfOut = ByteArrayOutputStream()
                     com.openhtmltopdf.pdfboxout.PdfRendererBuilder()
@@ -348,8 +445,8 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                                     BulkLetterService.sendEmailWithJakartaMail(
                                         to = toMail,
                                         cc = "",
-                                        subject = "Salary Slip for $monthStr - ${sal.employeeName3}",
-                                        htmlBody = "<p>Dear ${sal.employeeName3},</p><p>Please find your salary slip for <b>$monthStr</b> attached herewith.</p>",
+                                        subject = "Salary Slip for $formattedMonth - ${sal.employeeName3}",
+                                        htmlBody = "<p>Dear ${sal.employeeName3},</p><p>Please find your salary slip for <b>$formattedMonth</b> attached herewith.</p>",
                                         pdfBytes = pdfBytes,
                                         pdfName = fileName
                                     )

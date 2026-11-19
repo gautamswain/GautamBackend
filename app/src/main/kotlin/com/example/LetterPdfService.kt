@@ -38,6 +38,7 @@ object LetterPdfService {
         val bodyWithSign = formattedHtmlBody.replace("{{signBase64}}", signBase64)
 
         html = html
+            .replace("{{logoDataUri}}", BrandAssets.logoDataUri)
             .replace("{{bgBase64}}", bgBase64)
             .replace("{{refNo}}", refNo)
             .replace("{{date}}", date)
