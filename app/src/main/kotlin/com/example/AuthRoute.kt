@@ -18,7 +18,8 @@ data class LoginResponse(
     val allowed: Boolean,
     val verifycode: String? = null,
     val permissions: String? = null,
-    val reason: String? = null
+    val reason: String? = null,
+    val name: String = ""
 )
 
 @Serializable
@@ -30,24 +31,26 @@ data class CheckAccessRequest(
 data class CheckAccessResponse(
     val valid: Boolean,
     val permissions: String? = null,
-    val reason: String? = null
+    val reason: String? = null,
+    val name: String = ""
 )
 
 @Serializable
 data class LoginRecordDto(
     val entrycode: String = "",
-    val employeename: String = "",
     val verifycode: String = "",
     val permissions: String = "",
-    val veryfynumber: Int = 0
+    val veryfynumber: Int = 0,
+    val name: String = ""
 )
 
 @Serializable
 data class UpdateAccessRequest(
     val entrycode: String = "",
+    val verifycode: String = "",
     val permissions: String = "",
     val veryfynumber: Int = 0,
-    val verifycode: String = ""
+    val name: String = ""
 )
 
 @Serializable
@@ -67,10 +70,30 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
             }
 
             dbConnectionProvider().use { conn ->
-                val selectSql = "SELECT entrycode, verifycode, permissions, veryfynumber FROM login WHERE LOWER(TRIM(entrycode)) = ? LIMIT 1"
+                try {
+                    conn.createStatement().use { stmt ->
+                        stmt.execute("""
+                            CREATE TABLE IF NOT EXISTS login (
+                                entrycode TEXT,
+                                verifycode TEXT,
+                                permissions TEXT,
+                                veryfynumber INTEGER DEFAULT 0,
+                                name TEXT DEFAULT ''
+                            );
+                        """.trimIndent())
+                    }
+                } catch (_: Exception) {}
+                try {
+                    conn.createStatement().use { stmt ->
+                        stmt.execute("ALTER TABLE login ADD COLUMN name TEXT DEFAULT '';")
+                    }
+                } catch (_: Exception) {}
+
+                val selectSql = "SELECT entrycode, verifycode, permissions, veryfynumber, name FROM login WHERE LOWER(TRIM(entrycode)) = ? LIMIT 1"
                 var verifycode = ""
                 var permissions = ""
                 var veryfynumber = 0
+                var name = ""
                 var found = false
 
                 conn.prepareStatement(selectSql).use { ps ->
@@ -81,6 +104,7 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
                             verifycode = rs.getString("verifycode")?.trim()?.lowercase().orEmpty()
                             permissions = rs.getString("permissions")?.trim()?.lowercase().orEmpty()
                             veryfynumber = rs.getInt("veryfynumber")
+                            name = rs.getString("name")?.trim()?.lowercase().orEmpty()
                         }
                     }
                 }
@@ -96,7 +120,7 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
                             ps.setString(1, code)
                             ps.execute()
                         }
-                        call.respond(HttpStatusCode.OK, LoginResponse(allowed = true, verifycode = verifycode, permissions = permissions))
+                        call.respond(HttpStatusCode.OK, LoginResponse(allowed = true, verifycode = verifycode, permissions = permissions, name = name))
                     }
                     1 -> {
                         conn.prepareStatement("UPDATE login SET veryfynumber = 2 WHERE LOWER(TRIM(entrycode)) = ?").use { ps ->
@@ -125,9 +149,10 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
             }
 
             dbConnectionProvider().use { conn ->
-                val selectSql = "SELECT permissions, veryfynumber FROM login WHERE LOWER(TRIM(verifycode)) = ? LIMIT 1"
+                val selectSql = "SELECT permissions, veryfynumber, name FROM login WHERE LOWER(TRIM(verifycode)) = ? LIMIT 1"
                 var permissions = ""
                 var veryfynumber = -1
+                var name = ""
                 var found = false
 
                 conn.prepareStatement(selectSql).use { ps ->
@@ -137,12 +162,13 @@ fun Route.authRoutes(dbConnectionProvider: () -> Connection) {
                             found = true
                             permissions = rs.getString("permissions")?.trim()?.lowercase().orEmpty()
                             veryfynumber = rs.getInt("veryfynumber")
+                            name = rs.getString("name")?.trim()?.lowercase().orEmpty()
                         }
                     }
                 }
 
                 if (found && veryfynumber == 1) {
-                    call.respond(HttpStatusCode.OK, CheckAccessResponse(valid = true, permissions = permissions))
+                    call.respond(HttpStatusCode.OK, CheckAccessResponse(valid = true, permissions = permissions, name = name))
                 } else {
                     call.respond(HttpStatusCode.Forbidden, CheckAccessResponse(valid = false, reason = "Session revoked or inactive."))
                 }
@@ -157,6 +183,25 @@ fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
     get("/api/staff/login-records") {
         try {
             dbConnectionProvider().use { conn ->
+                try {
+                    conn.createStatement().use { stmt ->
+                        stmt.execute("""
+                            CREATE TABLE IF NOT EXISTS login (
+                                entrycode TEXT,
+                                verifycode TEXT,
+                                permissions TEXT,
+                                veryfynumber INTEGER DEFAULT 0,
+                                name TEXT DEFAULT ''
+                            );
+                        """.trimIndent())
+                    }
+                } catch (_: Exception) {}
+                try {
+                    conn.createStatement().use { stmt ->
+                        stmt.execute("ALTER TABLE login ADD COLUMN name TEXT DEFAULT '';")
+                    }
+                } catch (_: Exception) {}
+
                 val records = mutableListOf<LoginRecordDto>()
                 conn.createStatement().use { stmt ->
                     stmt.executeQuery("SELECT * FROM login").use { rs ->
@@ -165,26 +210,15 @@ fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
                             val verifycode = rs.getString("verifycode")?.trim()?.lowercase().orEmpty()
                             val permissions = rs.getString("permissions")?.trim()?.lowercase().orEmpty()
                             val veryfynumber = rs.getInt("veryfynumber")
-
-                            var employeename = entrycode
-                            try {
-                                conn.prepareStatement("SELECT employee_name_3 FROM MasterData WHERE LOWER(TRIM(Code_2)) = ? LIMIT 1").use { ps ->
-                                    ps.setString(1, entrycode)
-                                    ps.executeQuery().use { empRs ->
-                                        if (empRs.next()) {
-                                            employeename = empRs.getString("employee_name_3")?.trim()?.lowercase().orEmpty().ifBlank { entrycode }
-                                        }
-                                    }
-                                }
-                            } catch (_: Exception) {}
+                            val name = rs.getString("name")?.trim()?.lowercase().orEmpty()
 
                             records.add(
                                 LoginRecordDto(
                                     entrycode = entrycode,
-                                    employeename = employeename,
                                     verifycode = verifycode,
                                     permissions = permissions,
-                                    veryfynumber = veryfynumber
+                                    veryfynumber = veryfynumber,
+                                    name = name
                                 )
                             )
                         }
@@ -206,16 +240,18 @@ fun Route.adminLoginControlRoutes(dbConnectionProvider: () -> Connection) {
                 return@post
             }
 
+            val name = req.name.trim().lowercase()
             val permissions = req.permissions.trim().lowercase()
             val verifycode = req.verifycode.trim().lowercase()
 
             dbConnectionProvider().use { conn ->
-                val updateSql = "UPDATE login SET permissions = ?, veryfynumber = ?, verifycode = ? WHERE LOWER(TRIM(entrycode)) = ?"
+                val updateSql = "UPDATE login SET name = ?, permissions = ?, veryfynumber = ?, verifycode = ? WHERE LOWER(TRIM(entrycode)) = ?"
                 conn.prepareStatement(updateSql).use { ps ->
-                    ps.setString(1, permissions)
-                    ps.setInt(2, req.veryfynumber)
-                    ps.setString(3, verifycode)
-                    ps.setString(4, entrycode)
+                    ps.setString(1, name)
+                    ps.setString(2, permissions)
+                    ps.setInt(3, req.veryfynumber)
+                    ps.setString(4, verifycode)
+                    ps.setString(5, entrycode)
                     ps.execute()
                 }
                 call.respond(HttpStatusCode.OK, UpdateAccessResponse(updated = true, message = "Access updated successfully"))
