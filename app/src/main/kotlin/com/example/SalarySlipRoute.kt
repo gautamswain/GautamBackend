@@ -230,6 +230,7 @@ object SalarySlipGenerator {
 
         val secretCode = generateSecretCode(rawEmpCode, formattedMonth, netAmount)
         val documentHeaderHtml = BrandAssets.renderDocumentHeader("Salary Slip for the Month Of $formattedMonth", secretCode)
+        val qrDataUri = BrandAssets.generateQrDataUri(secretCode)
 
         val maxRows = maxOf(validEarnings.size, validDeductions.size)
         val rowsHtml = StringBuilder()
@@ -299,9 +300,7 @@ object SalarySlipGenerator {
                     .text-right { text-align: right; }
                     .total-row { font-weight: bold; background: #FFF3E0; color: #1F2937; }
                     .net-box { border: 2px solid #E65100; padding: 8px; background: #FFF3E0; font-weight: bold; font-size: 11px; margin-top: 10px; color: #1F2937; }
-                    .footer-container { margin-top: 25px; border-top: 1px solid #D1D5DB; padding-top: 6px; }
-                    .footer { text-align: center; font-size: 9px; color: #4B5563; }
-                    .bottom-secret { font-size: 9px; color: #6B7280; letter-spacing: 0.5px; float: left; }
+                    .footer-container { margin-top: 25px; border-top: 1px solid #D1D5DB; padding-top: 6px; width: 100%; border-collapse: collapse; }
                 </style>
             </head>
             <body>
@@ -371,10 +370,17 @@ object SalarySlipGenerator {
                     Net Salary :- Rs. ${formatMoney(netAmount)} &#160;&#160;&#160;(Rupees $netWords Only)
                 </div>
 
-                <div class="footer-container">
-                    <span class="bottom-secret">$secretCode</span>
-                    <div class="footer">This is a computer generated statement and does not require any signature or stamp.</div>
-                </div>
+                <table class="footer-container">
+                    <tr>
+                        <td style="width: 75%; vertical-align: middle; border: none; padding: 0;">
+                            <div style="font-size: 9px; color: #6B7280; letter-spacing: 0.6px;">$secretCode</div>
+                            <div style="font-size: 9px; color: #4B5563; text-align: left; margin-top: 4px;">This is a computer generated statement and does not require any signature or stamp.</div>
+                        </td>
+                        <td style="width: 25%; text-align: right; vertical-align: middle; border: none; padding: 0;">
+                            <img src="$qrDataUri" alt="QR" style="width: 58px; height: 58px;" />
+                        </td>
+                    </tr>
+                </table>
             </body>
             </html>
         """.trimIndent()

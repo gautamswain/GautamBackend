@@ -67,6 +67,7 @@ dependencies {
     implementation("com.openhtmltopdf:openhtmltopdf-core:1.0.10")
     implementation("org.eclipse.angus:jakarta.mail:2.0.2")
     implementation("org.eclipse.angus:angus-activation:2.0.1")
+    implementation("com.google.zxing:core:3.5.3")
 
 // Apache POI for Excel (.xls and .xlsx) reading
     implementation("org.apache.poi:poi:5.2.5")
