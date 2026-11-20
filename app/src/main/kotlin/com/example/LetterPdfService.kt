@@ -65,27 +65,17 @@ object LetterPdfService {
             .replace("{{formattedHtmlBody}}", bodyWithSign)
             .replace("{{secretCodeFooter}}", secretCodeFooter)
 
-        // XHTML Sanitization for OpenHTMLToPDF
-        html = html.replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "<br/>")
-        html = html.replace(Regex("<hr\\s*/?>", RegexOption.IGNORE_CASE), "<hr/>")
-        html = html.replace(Regex("<img([^>]*?)(?<!/)>", RegexOption.IGNORE_CASE), "<img$1/>")
-
-        html = html
-            .replace("&nbsp;", "&#160;")
-            .replace("&ndash;", "&#8211;")
-            .replace("&mdash;", "&#8212;")
-            .replace("&rsquo;", "&#8217;")
-            .replace("&lsquo;", "&#8216;")
-            .replace("&rdquo;", "&#8221;")
-            .replace("&ldquo;", "&#8220;")
-
-        html = html.replace(Regex("&(?!(amp|lt|gt|quot|apos|#\\d+|#x[0-9a-fA-F]+);)"), "&amp;")
-        html = html.replace(Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]"), "")
+        val doc = org.jsoup.Jsoup.parse(html)
+        doc.outputSettings()
+            .syntax(org.jsoup.nodes.Document.OutputSettings.Syntax.xml)
+            .escapeMode(org.jsoup.nodes.Entities.EscapeMode.xhtml)
+            .charset(Charsets.UTF_8)
+        val validXhtml = doc.html()
 
         val outputStream = ByteArrayOutputStream()
         PdfRendererBuilder()
             .useFastMode()
-            .withHtmlContent(html, null)
+            .withHtmlContent(validXhtml, null)
             .toStream(outputStream)
             .run()
 
