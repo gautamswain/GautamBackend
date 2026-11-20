@@ -182,8 +182,11 @@ object BulkLetterService {
         "3" to "Department Missing",
         "4" to "Designation Missing",
         "5" to "Branch Missing",
+        "6" to "Destination Branch Missing",
+        "7" to "Promoted Designation Missing",
         "8" to "DOJ Missing",
         "9" to "DOL/WEF Missing",
+        "10" to "WEF Missing",
         "11" to "Salary Missing",
         "12" to "Salary Words Missing",
         "13" to "Probation Period Missing",
@@ -454,21 +457,38 @@ object BulkLetterService {
         val effectiveLetterDate = if (isOfferOrAppointment && emp.doj.isNotBlank()) emp.doj else todayDate
         val effectiveInterviewDate = interviewDate.ifBlank { emp.doj }
 
+        val has6 = rawTemplate.contains("{6}")
+        val has7 = rawTemplate.contains("{7}")
+
         val effectiveBranch = row.dBranch?.takeIf { it.isNotBlank() } ?: emp.branch
-        val effectiveAddress = row.address?.takeIf { it.isNotBlank() } ?: emp.presentAddress
+        val currentBranchVal = if (has6) {
+            emp.branch.ifBlank { row.dBranch ?: "Branch Missing" }
+        } else {
+            effectiveBranch.ifBlank { "Branch Missing" }
+        }
+        val destinationBranchVal = row.dBranch?.takeIf { it.isNotBlank() } ?: emp.branch.ifBlank { "Destination Branch Missing" }
+
         val effectiveDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: emp.designation
+        val currentDesigVal = if (has7) {
+            emp.designation.ifBlank { row.promoTo ?: "Designation Missing" }
+        } else {
+            effectiveDesignation.ifBlank { "Designation Missing" }
+        }
+        val promotedDesigVal = row.promoTo?.takeIf { it.isNotBlank() } ?: emp.designation.ifBlank { "Promoted Designation Missing" }
+
+        val effectiveAddress = row.address?.takeIf { it.isNotBlank() } ?: emp.presentAddress
         val effectiveDolOrWef = row.dol?.takeIf { it.isNotBlank() }
             ?: row.wef?.takeIf { it.isNotBlank() }
             ?: resolvedWef.takeIf { it.isNotBlank() }
             ?: emp.dol
+
+        val wefVal = row.wef?.takeIf { it.isNotBlank() } ?: resolvedWef.ifBlank { "WEF Missing" }
 
         val mapper: (String) -> String = if (isEmailField) { { it } } else { { xmlEscape(it) } }
 
         val nameVal = emp.name.ifBlank { "Name Missing" }
         val codeVal = emp.code.ifBlank { "Code Missing" }
         val deptVal = emp.department.ifBlank { "Department Missing" }
-        val desigVal = effectiveDesignation.ifBlank { "Designation Missing" }
-        val branchVal = effectiveBranch.ifBlank { "Branch Missing" }
         val dojVal = emp.doj.ifBlank { "DOJ Missing" }
         val dolVal = effectiveDolOrWef.ifBlank { "DOL/WEF Missing" }
 
@@ -520,10 +540,13 @@ object BulkLetterService {
             .replace("{1}", mapper(nameVal))
             .replace("{2}", mapper(codeVal))
             .replace("{3}", mapper(deptVal))
-            .replace("{4}", mapper(desigVal))
-            .replace("{5}", mapper(branchVal))
+            .replace("{4}", mapper(currentDesigVal))
+            .replace("{5}", mapper(currentBranchVal))
+            .replace("{6}", mapper(destinationBranchVal))
+            .replace("{7}", mapper(promotedDesigVal))
             .replace("{8}", mapper(dojVal))
             .replace("{9}", mapper(dolVal))
+            .replace("{10}", mapper(wefVal))
             .replace("{13}", mapper(probVal))
             .replace("{14}", mapper(fatherVal))
             .replace("{15}", mapper(addrVal))
@@ -537,7 +560,7 @@ object BulkLetterService {
             .replace("{21}", mapper(intDateVal))
             .replace("{emp_mail}", mapper(emp.email))
             .replace("{ddmmyy}", mapper(ddmmyy))
-            .replace("{wef}", mapper(dolVal))
+            .replace("{wef}", mapper(wefVal))
 
         return highlightUnreplacedPlaceholders(replaced, mapper)
     }
@@ -943,7 +966,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                 call.respondText(previewHtml, ContentType.Text.Html, HttpStatusCode.OK)
             }
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Preview failed"))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Preview failed")))
         }
     }
 
@@ -1019,7 +1042,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             """
                             CREATE TABLE IF NOT EXISTS bulkletter (
                                 lettercode TEXT,
-                                telete TEXT,
+                                templete TEXT,
                                 filenameformat TEXT,
                                 subject TEXT,
                                 body TEXT,
