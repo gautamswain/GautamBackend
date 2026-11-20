@@ -185,6 +185,7 @@ object BulkLetterService {
         "8" to "DOJ Missing",
         "9" to "DOL/WEF Missing",
         "11" to "Salary Missing",
+        "12" to "Salary Words Missing",
         "13" to "Probation Period Missing",
         "14" to "Father's Name Missing",
         "15" to "Address Missing",
@@ -193,6 +194,57 @@ object BulkLetterService {
         "20" to "Responsible Branches Missing",
         "21" to "Interview Date Missing"
     )
+
+    fun formatIndianNumber(amount: Long): String {
+        val s = amount.toString()
+        if (s.length <= 3) return s
+        val lastThree = s.takeLast(3)
+        val rest = s.dropLast(3)
+        val sb = StringBuilder()
+        var i = rest.length
+        while (i > 0) {
+            val start = maxOf(0, i - 2)
+            sb.insert(0, rest.substring(start, i))
+            if (start > 0) sb.insert(0, ",")
+            i = start
+        }
+        return if (sb.isNotEmpty()) "$sb,$lastThree" else lastThree
+    }
+
+    fun convertToIndianRupeesWords(amount: Long): String {
+        val n = amount
+        if (n == 0L) return "Rupees Zero Only"
+
+        fun convertLessThanOneThousand(num: Int): String {
+            val units = arrayOf("", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen")
+            val tens = arrayOf("", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety")
+
+            val current = if (num % 100 < 20) {
+                units[num % 100]
+            } else {
+                tens[(num % 100) / 10] + if (num % 10 > 0) " " + units[num % 10] else ""
+            }
+
+            return if (num > 99) {
+                units[num / 100] + " Hundred" + if (num % 100 > 0) " and " + current else ""
+            } else {
+                current
+            }
+        }
+
+        var result = ""
+        val crore = n / 10000000
+        val lakh = (n / 100000) % 100
+        val thousand = (n / 1000) % 100
+        val hundred = n % 1000
+
+        if (crore > 0) result += convertLessThanOneThousand(crore.toInt()) + " Crore "
+        if (lakh > 0) result += convertLessThanOneThousand(lakh.toInt()) + " Lakh "
+        if (thousand > 0) result += convertLessThanOneThousand(thousand.toInt()) + " Thousand "
+        if (hundred > 0) result += convertLessThanOneThousand(hundred.toInt())
+
+        return "Rupees " + result.trim() + " Only"
+    }
 
     fun formatNameWithSalutation(rawName: String, gender: String): String {
         val trimmed = rawName.trim()
@@ -423,7 +475,42 @@ object BulkLetterService {
         val branchVal = effectiveBranch.ifBlank { "Branch Missing" }
         val dojVal = emp.doj.ifBlank { "DOJ Missing" }
         val dolVal = effectiveDolOrWef.ifBlank { "DOL/WEF Missing" }
-        val salaryVal = emp.salary.ifBlank { "Salary Missing" }
+
+        val cleanSalary = emp.salary.trim()
+        val amountLong = cleanSalary
+            .replace("Rs.", "", ignoreCase = true)
+            .replace("rs", "", ignoreCase = true)
+            .replace("/-", "")
+            .replace(",", "")
+            .replace(" ", "")
+            .substringBefore(".")
+            .toLongOrNull()
+
+        val salaryReplacedTemplate = if (amountLong != null && amountLong > 0) {
+            val formattedDigits = formatIndianNumber(amountLong)
+            val wordsText = convertToIndianRupeesWords(amountLong)
+            if (rawTemplate.contains("{12}")) {
+                rawTemplate
+                    .replace("{11}", mapper(formattedDigits))
+                    .replace("{12}", mapper(wordsText))
+            } else {
+                val fullSalaryStr = "Rs. $formattedDigits/- ($wordsText)"
+                rawTemplate
+                    .replace("Rs.{11}/-", mapper(fullSalaryStr))
+                    .replace("Rs. {11}/-", mapper(fullSalaryStr))
+                    .replace("Rs.{11}", mapper(fullSalaryStr))
+                    .replace("Rs. {11}", mapper(fullSalaryStr))
+                    .replace("{11}", mapper(fullSalaryStr))
+            }
+        } else {
+            val fallback = emp.salary.ifBlank { "Salary Missing" }
+            rawTemplate
+                .replace("Rs.{11}/-", mapper(fallback))
+                .replace("Rs. {11}/-", mapper(fallback))
+                .replace("{11}", mapper(fallback))
+                .replace("{12}", "")
+        }
+
         val probVal = probationPeriod.ifBlank { "Probation Period Missing" }
         val fatherVal = emp.fatherName.ifBlank { "Father's Name Missing" }
         val addrVal = effectiveAddress.ifBlank { "Address Missing" }
@@ -431,7 +518,7 @@ object BulkLetterService {
         val respBrVal = responsibleBranches.ifBlank { emp.branch.ifBlank { "Branch Missing" } }
         val intDateVal = effectiveInterviewDate.ifBlank { "Interview Date Missing" }
 
-        val processedTemplate = rawTemplate.replace(Regex("\\{X\\}", RegexOption.IGNORE_CASE), "<br/><br/>")
+        val processedTemplate = salaryReplacedTemplate.replace(Regex("\\{X\\}", RegexOption.IGNORE_CASE), "<br/><br/>")
 
         val replaced = processedTemplate
             .replace("{1}", mapper(nameVal))
@@ -441,7 +528,6 @@ object BulkLetterService {
             .replace("{5}", mapper(branchVal))
             .replace("{8}", mapper(dojVal))
             .replace("{9}", mapper(dolVal))
-            .replace("{11}", mapper(salaryVal))
             .replace("{13}", mapper(probVal))
             .replace("{14}", mapper(fatherVal))
             .replace("{15}", mapper(addrVal))
@@ -648,7 +734,7 @@ object BulkLetterService {
                 ps.execute()
             }
         } catch (e: Exception) {
-            println("Warning: Failed to update coment77_59 for $empCode: ${e.message}")
+            println("Warning: Failed to update coment77_59 for $empCode: {e.message}")
         }
     }
 
@@ -1304,7 +1390,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         }
 
                         generatedPdfs.add(resolvedFileName to pdfBytes)
-                    } catch (rowEx: Exception) {
+                    } catch (rowEx:Exception) {
                         skippedErrors.add(SkippedLetterError(code = row.code, letter = row.letter, reason = rowEx.message ?: "Processing error"))
                     }
                 }
