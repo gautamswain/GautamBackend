@@ -176,12 +176,51 @@ object BulkLetterService {
     private val istZone: ZoneId = ZoneId.of("Asia/Kolkata")
     private val displayDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy")
 
+    private val placeholderLabels = mapOf(
+        "1" to "Name Missing",
+        "2" to "Code Missing",
+        "3" to "Department Missing",
+        "4" to "Designation Missing",
+        "5" to "Branch Missing",
+        "8" to "DOJ Missing",
+        "9" to "DOL/WEF Missing",
+        "11" to "Salary Missing",
+        "13" to "Probation Period Missing",
+        "14" to "Father's Name Missing",
+        "15" to "Address Missing",
+        "16" to "Mobile No Missing",
+        "19" to "Date Missing",
+        "20" to "Responsible Branches Missing",
+        "21" to "Interview Date Missing"
+    )
+
     fun extractCleanEmail(raw: String): String {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return ""
         val match = Regex("<([^>]+)>").find(trimmed)
         val extracted = match?.groupValues?.getOrNull(1)?.trim() ?: trimmed
         return if (extracted.contains("@")) extracted else ""
+    }
+
+    fun formatNameWithSalutation(rawName: String, gender: String): String {
+        val trimmed = rawName.trim()
+        if (trimmed.isBlank()) return ""
+
+        val prefixes = listOf("Mr.", "Mr", "Ms.", "Ms", "Mrs.", "Mrs", "Miss", "Dr.", "Shri", "Smt.")
+        val hasSalutation = prefixes.any { prefix ->
+            trimmed.equals(prefix, ignoreCase = true) ||
+            trimmed.startsWith("$prefix ", ignoreCase = true) ||
+            trimmed.startsWith("$prefix.", ignoreCase = true)
+        }
+
+        if (hasSalutation) return trimmed
+
+        val g = gender.trim().lowercase()
+        return when {
+            g == "male" || g == "m" -> "Mr. $trimmed"
+            g == "female" || g == "f" -> "Ms. $trimmed"
+            else -> trimmed
+        }
     }
 
     fun fetchEmployeeFromMasterData(conn: Connection, empCode: String): MasterEmployeeData? {
@@ -196,8 +235,10 @@ object BulkLetterService {
             stmt.executeQuery().use { rs ->
                 if (!rs.next()) return null
                 val dto = StaffRepository.parseMasterDataDto(rs)
+                val rawName = dto.employeeName.ifBlank { dto.id }
+                val formattedName = formatNameWithSalutation(rawName, dto.gender)
                 return MasterEmployeeData(
-                    name = dto.employeeName.ifBlank { dto.id },
+                    name = formattedName,
                     code = dto.empId.ifBlank { empCode },
                     department = dto.department,
                     designation = dto.designation,
@@ -366,29 +407,54 @@ object BulkLetterService {
 
         val mapper: (String) -> String = if (isEmailField) { { it } } else { { xmlEscape(it) } }
 
-        return rawTemplate
-            .replace("{1}", mapper(emp.name))
-            .replace("{2}", mapper(emp.code))
-            .replace("{3}", mapper(emp.department))
-            .replace("{4}", mapper(effectiveDesignation))
-            .replace("{5}", mapper(effectiveBranch))
-            .replace("{8}", mapper(emp.doj))
-            .replace("{9}", mapper(effectiveDolOrWef))
-            .replace("{11}", mapper(emp.salary))
-            .replace("{13}", mapper(probationPeriod))
-            .replace("{14}", mapper(emp.fatherName))
-            .replace("{15}", mapper(effectiveAddress))
-            .replace("{16}", mapper(emp.mobileNo))
+        val nameVal = emp.name.ifBlank { "Name Missing" }
+        val codeVal = emp.code.ifBlank { "Code Missing" }
+        val deptVal = emp.department.ifBlank { "Department Missing" }
+        val desigVal = effectiveDesignation.ifBlank { "Designation Missing" }
+        val branchVal = effectiveBranch.ifBlank { "Branch Missing" }
+        val dojVal = emp.doj.ifBlank { "DOJ Missing" }
+        val dolVal = effectiveDolOrWef.ifBlank { "DOL/WEF Missing" }
+        val salaryVal = emp.salary.ifBlank { "Salary Missing" }
+        val probVal = probationPeriod.ifBlank { "Probation Period Missing" }
+        val fatherVal = emp.fatherName.ifBlank { "Father's Name Missing" }
+        val addrVal = effectiveAddress.ifBlank { "Address Missing" }
+        val mobVal = emp.mobileNo.ifBlank { "Mobile No Missing" }
+        val respBrVal = responsibleBranches.ifBlank { "Responsible Branches Missing" }
+        val intDateVal = interviewDate.ifBlank { "Interview Date Missing" }
+
+        val replaced = rawTemplate
+            .replace("{1}", mapper(nameVal))
+            .replace("{2}", mapper(codeVal))
+            .replace("{3}", mapper(deptVal))
+            .replace("{4}", mapper(desigVal))
+            .replace("{5}", mapper(branchVal))
+            .replace("{8}", mapper(dojVal))
+            .replace("{9}", mapper(dolVal))
+            .replace("{11}", mapper(salaryVal))
+            .replace("{13}", mapper(probVal))
+            .replace("{14}", mapper(fatherVal))
+            .replace("{15}", mapper(addrVal))
+            .replace("{16}", mapper(mobVal))
             .replace("{17}", mapper(emp.heShe))
             .replace("{18}", mapper(emp.hisHer))
             .replace("{17_lower}", mapper(emp.heShe.lowercase()))
             .replace("{18_lower}", mapper(emp.hisHer.lowercase()))
             .replace("{19}", mapper(todayDate))
-            .replace("{20}", mapper(responsibleBranches))
-            .replace("{21}", mapper(interviewDate))
+            .replace("{20}", mapper(respBrVal))
+            .replace("{21}", mapper(intDateVal))
             .replace("{emp_mail}", mapper(emp.email))
             .replace("{ddmmyy}", mapper(ddmmyy))
-            .replace("{wef}", mapper(effectiveDolOrWef))
+            .replace("{wef}", mapper(dolVal))
+
+        return highlightUnreplacedPlaceholders(replaced, mapper)
+    }
+
+    private fun highlightUnreplacedPlaceholders(template: String, mapper: (String) -> String): String {
+        return template.replace(Regex("\\{(\\d+)\\}")) { matchResult ->
+            val num = matchResult.groupValues[1]
+            val label = placeholderLabels[num] ?: "Field {$num} Missing"
+            mapper(label)
+        }
     }
 
     fun resolveEmailField(conn: Connection, rawToken: String, emp: MasterEmployeeData): String {
@@ -717,7 +783,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
             dbConnectionProvider().use { conn ->
                 val empData = BulkLetterService.fetchEmployeeFromMasterData(conn, code)
                     ?: MasterEmployeeData(
-                        name = code,
+                        name = BulkLetterService.formatNameWithSalutation(code, "Male"),
                         code = code,
                         department = "",
                         designation = promoTo ?: "",
@@ -1085,15 +1151,13 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
             val todayDate = LocalDate.now(ZoneId.of("Asia/Kolkata"))
                 .format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
-            val ddmmyy = LocalDate.now(ZoneId.of("Asia/Kolkata"))
-                .format(DateTimeFormatter.ofPattern("ddMMyy"))
 
             dbConnectionProvider().use { conn ->
                 for ((index, row) in expandedRows.withIndex()) {
                     try {
                         val empData = BulkLetterService.fetchEmployeeFromMasterData(conn, row.code)
                             ?: MasterEmployeeData(
-                                name = row.code,
+                                name = BulkLetterService.formatNameWithSalutation(row.code, "Male"),
                                 code = row.code,
                                 department = "",
                                 designation = row.promoTo ?: "",
