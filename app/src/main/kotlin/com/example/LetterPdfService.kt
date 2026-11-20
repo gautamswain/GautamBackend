@@ -90,10 +90,14 @@ object LetterPdfService {
             .syntax(org.jsoup.nodes.Document.OutputSettings.Syntax.xml)
             .escapeMode(org.jsoup.nodes.Entities.EscapeMode.xhtml)
             .charset(Charsets.UTF_8)
-        var validXhtml = doc.html()
+            .prettyPrint(true)
 
-        // Strip JSoup CDATA wrappers around <style>
-        validXhtml = validXhtml
+        doc.select("style").forEach { styleEl ->
+            val cssText = styleEl.data()
+            styleEl.text(cssText)
+        }
+
+        val validXhtml = doc.html()
             .replace("/*<![CDATA[*/", "")
             .replace("/*]]>*/", "")
             .replace("&lt;![CDATA[", "")

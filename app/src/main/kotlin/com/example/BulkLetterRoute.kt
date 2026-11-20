@@ -400,7 +400,11 @@ object BulkLetterService {
 
         val isOfferOrAppointment = rawTemplate.contains("offer", ignoreCase = true) || rawTemplate.contains("appointment", ignoreCase = true)
         val effectiveLetterDate = if (isOfferOrAppointment && emp.doj.isNotBlank()) emp.doj else todayDate
-        val effectiveInterviewDate = if (isOfferOrAppointment && emp.doj.isNotBlank()) emp.doj else interviewDate
+        val effectiveInterviewDate = if (isOfferOrAppointment && interviewDate.isBlank()) {
+            emp.doj
+        } else {
+            interviewDate.ifBlank { emp.doj }
+        }
 
         val effectiveBranch = row.dBranch?.takeIf { it.isNotBlank() } ?: emp.branch
         val effectiveAddress = row.address?.takeIf { it.isNotBlank() } ?: emp.presentAddress
