@@ -56,6 +56,20 @@ data class SendEmailsResponse(
 )
 
 @Serializable
+data class SkippedLetterError(
+    val code: String,
+    val letter: String,
+    val reason: String
+)
+
+@Serializable
+data class GenerateLetterErrorResponse(
+    val error: String,
+    val skipped: List<SkippedLetterError> = emptyList(),
+    val exception: String? = null
+)
+
+@Serializable
 data class ResolveMailRequest(
     val code: String,
     val rule: String // e.g., "ownp, owno, pipe, branch, ADKR1001o, ADKR1002p"
@@ -742,14 +756,6 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                     LetterCodeGenerator.generate(code, todayDate).combinedCode
                 } catch (_: Exception) { "" }
 
-                val pdfBytes = LetterPdfService.generateLetterPdf(
-                    formattedHtmlBody = finalHtmlBody,
-                    refNo = "ADH/HR/$code/1",
-                    date = todayDate,
-                    secretCode = secretCode
-                )
-
-                // Return PDF bytes or HTML preview? Requirement says: "Render and return the placeholder-resolved HTML (ContentType.Text.Html)"
                 val previewHtml = """
                     <!DOCTYPE html>
                     <html>
@@ -1046,7 +1052,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
     // POST /api/turso/generateletter
     post("/api/turso/generateletter") {
-        val skippedErrors = mutableListOf<Map<String, String>>()
+        val skippedErrors = mutableListOf<SkippedLetterError>()
         val generatedPdfs = mutableListOf<Pair<String, ByteArray>>()
 
         try {
@@ -1114,7 +1120,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             letterConfig.subject.contains("{9}") ||
                             letterConfig.body.contains("{9}")
                         if (requiresDol && empData.dol.isBlank()) {
-                            skippedErrors.add(mapOf("code" to row.code, "letter" to row.letter, "reason" to "Date of Leaving missing"))
+                            skippedErrors.add(SkippedLetterError(code = row.code, letter = row.letter, reason = "Date of Leaving missing"))
                             continue
                         }
 
@@ -1200,13 +1206,13 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
                         generatedPdfs.add(resolvedFileName to pdfBytes)
                     } catch (rowEx: Exception) {
-                        skippedErrors.add(mapOf("code" to row.code, "letter" to row.letter, "reason" to (rowEx.message ?: "Processing error")))
+                        skippedErrors.add(SkippedLetterError(code = row.code, letter = row.letter, reason = rowEx.message ?: "Processing error"))
                     }
                 }
             }
 
             if (generatedPdfs.isEmpty()) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "No valid letters generated", "skipped" to skippedErrors))
+                call.respond(HttpStatusCode.NotFound, GenerateLetterErrorResponse(error = "No valid letters generated", skipped = skippedErrors))
                 return@post
             }
 
@@ -1246,9 +1252,10 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
             e.printStackTrace()
             call.respond(
                 HttpStatusCode.InternalServerError,
-                mapOf(
-                    "error" to (e.localizedMessage ?: e.message ?: "Unknown error"),
-                    "exception" to e.javaClass.simpleName
+                GenerateLetterErrorResponse(
+                    error = e.localizedMessage ?: e.message ?: "Unknown error",
+                    skipped = skippedErrors,
+                    exception = e.javaClass.simpleName
                 )
             )
         }
