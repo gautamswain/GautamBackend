@@ -5,8 +5,12 @@
     <title>Adhikar Official Letter</title>
     <style>
         @page {
-            size: A4 portrait;
-            margin: 0;
+            size: A4;
+            margin: 38mm 18mm 32mm 18mm;
+            background-image: url("data:image/jpeg;base64,{{bgBase64}}");
+            background-repeat: no-repeat;
+            background-position: center center;
+            background-size: 210mm 297mm;
         }
         * {
             box-sizing: border-box;
@@ -14,16 +18,9 @@
             padding: 0;
         }
         body {
-            width: 210mm;
-            height: 297mm;
             font-family: Arial, Helvetica, sans-serif;
             font-size: 11px;
             color: #111111;
-            background-image: url("data:image/jpeg;base64,{{bgBase64}}");
-            background-size: 210mm 297mm;
-            background-repeat: no-repeat;
-            /* ଉପରୁ 38mm, ଡାହାଣରୁ 15mm, ତଳୁ 34mm ଓ ବାମରୁ 15mm ଛାଡ଼ି ଚିଠି ଲେଖାହେବ */
-            padding: 38mm 15mm 34mm 15mm;
         }
         .meta-table {
             width: 100%;
@@ -31,6 +28,11 @@
             margin-bottom: 12px;
             font-weight: bold;
             font-size: 10.5px;
+        }
+        .top-bar, .top-bar td, .header-row, .header-row td, .details-table, .details-table td, .signature-table, .signature-table td, .footer-bar, .footer-bar td, .footer-table, .footer-table td {
+            border: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
         }
         .letter-body p {
             margin-bottom: 9px;
@@ -50,6 +52,7 @@
     </style>
 </head>
 <body>
+    {{qrTopRight}}
     {{headerBlock}}
 
     <div class="letter-body">

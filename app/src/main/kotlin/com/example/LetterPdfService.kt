@@ -82,26 +82,21 @@ object LetterPdfService {
             """.trimIndent()
         }
 
-        val secretCodeFooter = if (secretCode.isNotBlank()) {
+        val qrTopRight = if (secretCode.isNotBlank()) {
             val qrUri = BrandAssets.generateQrDataUri(secretCode)
-            val qrImg = if (qrUri.isNotBlank()) """<img src="$qrUri" alt="QR" style="width: 50px; height: 50px;" />""" else ""
-            """
-            <table style="width: 100%; border-collapse: collapse; margin-top: 25px; border-top: 1px solid #222; padding-top: 6px;">
-                <tr>
-                    <td style="width: 75%; vertical-align: middle; border: none; padding: 0;">
-                        <div style="font-size: 9px; color: #6B7280; letter-spacing: 0.6px;">$secretCode</div>
-                    </td>
-                    <td style="width: 25%; text-align: right; vertical-align: middle; border: none; padding: 0;">
-                        $qrImg
-                    </td>
-                </tr>
-            </table>
-            """.trimIndent()
+            if (qrUri.isNotBlank()) """<div style="position: fixed; top: 8mm; right: 12mm; z-index: 10;"><img src="$qrUri" alt="QR" style="width: 48px; height: 48px; border: none;" /></div>""" else ""
+        } else {
+            ""
+        }
+
+        val secretCodeFooter = if (secretCode.isNotBlank()) {
+            """<div style="width: 100%; text-align: right; font-size: 9px; color: #6B7280; letter-spacing: 0.6px; margin-top: 8px; border: none;">$secretCode</div>"""
         } else {
             ""
         }
 
         html = html
+            .replace("{{qrTopRight}}", qrTopRight)
             .replace("{{headerBlock}}", headerBlock)
             .replace("{{bgBase64}}", bgBase64)
             .replace("{{formattedHtmlBody}}", bodyWithSign)
