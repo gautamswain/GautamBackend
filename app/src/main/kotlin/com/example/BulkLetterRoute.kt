@@ -194,14 +194,6 @@ object BulkLetterService {
         "21" to "Interview Date Missing"
     )
 
-    fun extractCleanEmail(raw: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isBlank()) return ""
-        val match = Regex("<([^>]+)>").find(trimmed)
-        val extracted = match?.groupValues?.getOrNull(1)?.trim() ?: trimmed
-        return if (extracted.contains("@")) extracted else ""
-    }
-
     fun formatNameWithSalutation(rawName: String, gender: String): String {
         val trimmed = rawName.trim()
         if (trimmed.isBlank()) return ""
@@ -221,6 +213,14 @@ object BulkLetterService {
             g == "female" || g == "f" -> "Ms. $trimmed"
             else -> trimmed
         }
+    }
+
+    fun extractCleanEmail(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return ""
+        val match = Regex("<([^>]+)>").find(trimmed)
+        val extracted = match?.groupValues?.getOrNull(1)?.trim() ?: trimmed
+        return if (extracted.contains("@")) extracted else ""
     }
 
     fun fetchEmployeeFromMasterData(conn: Connection, empCode: String): MasterEmployeeData? {
@@ -391,9 +391,10 @@ object BulkLetterService {
         responsibleBranches: String,
         probationPeriod: String,
         resolvedWef: String,
-        isEmailField: Boolean = false
+        isEmailField: Boolean = false,
+        overrideTodayDate: String? = null
     ): String {
-        val todayDate = DateUtils.toDisplayDate(LocalDate.now(istZone).toString())
+        val todayDate = overrideTodayDate?.takeIf { it.isNotBlank() } ?: DateUtils.toDisplayDate(LocalDate.now(istZone).toString())
         val ddmmyy = LocalDate.now(istZone).format(DateTimeFormatter.ofPattern("ddMMyy"))
         val interviewDate = calculateInterviewDate(emp.doj)
 
@@ -807,6 +808,18 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                 val probationPeriod = BulkLetterService.fetchProbationDays(conn, targetDesignation)
                 val responsibleBranches = BulkLetterService.fetchResponsibleBranches(conn, code)
 
+                val isOfferOrAppointment = letterConfig.lettercode.contains("offer", ignoreCase = true) ||
+                    letterConfig.lettercode.contains("appointment", ignoreCase = true) ||
+                    letterConfig.filenameformat.contains("offer", ignoreCase = true) ||
+                    letterConfig.filenameformat.contains("appointment", ignoreCase = true) ||
+                    letterConfig.subject.contains("offer", ignoreCase = true) ||
+                    letterConfig.subject.contains("appointment", ignoreCase = true) ||
+                    letterConfig.templete.contains("offer", ignoreCase = true) ||
+                    letterConfig.templete.contains("appointment", ignoreCase = true)
+
+                val todayDate = LocalDate.now(ZoneId.of("Asia/Kolkata")).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+                val effectiveLetterDate = if (isOfferOrAppointment && empData.doj.isNotBlank()) empData.doj else todayDate
+
                 val finalHtmlBody = BulkLetterService.applyPlaceholders(
                     rawTemplate = letterConfig.templete,
                     emp = empData,
@@ -814,12 +827,12 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                     responsibleBranches = responsibleBranches,
                     probationPeriod = probationPeriod,
                     resolvedWef = resolvedWef,
-                    isEmailField = false
+                    isEmailField = false,
+                    overrideTodayDate = effectiveLetterDate
                 )
 
-                val todayDate = LocalDate.now(ZoneId.of("Asia/Kolkata")).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
                 val secretCode = try {
-                    LetterCodeGenerator.generate(code, todayDate).combinedCode
+                    LetterCodeGenerator.generate(code, effectiveLetterDate).combinedCode
                 } catch (_: Exception) { "" }
 
                 val previewHtml = """
@@ -1192,6 +1205,17 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         val probationPeriod = BulkLetterService.fetchProbationDays(conn, targetDesignation)
                         val responsibleBranches = BulkLetterService.fetchResponsibleBranches(conn, row.code)
 
+                        val isOfferOrAppointment = letterConfig.lettercode.contains("offer", ignoreCase = true) ||
+                            letterConfig.lettercode.contains("appointment", ignoreCase = true) ||
+                            letterConfig.filenameformat.contains("offer", ignoreCase = true) ||
+                            letterConfig.filenameformat.contains("appointment", ignoreCase = true) ||
+                            letterConfig.subject.contains("offer", ignoreCase = true) ||
+                            letterConfig.subject.contains("appointment", ignoreCase = true) ||
+                            letterConfig.templete.contains("offer", ignoreCase = true) ||
+                            letterConfig.templete.contains("appointment", ignoreCase = true)
+
+                        val effectiveLetterDate = if (isOfferOrAppointment && empData.doj.isNotBlank()) empData.doj else todayDate
+
                         val finalHtmlBody = BulkLetterService.applyPlaceholders(
                             rawTemplate = letterConfig.templete,
                             emp = empData,
@@ -1199,17 +1223,18 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             responsibleBranches = responsibleBranches,
                             probationPeriod = probationPeriod,
                             resolvedWef = resolvedWef,
-                            isEmailField = false
+                            isEmailField = false,
+                            overrideTodayDate = effectiveLetterDate
                         )
 
                         val secretCode = try {
-                            LetterCodeGenerator.generate(empData.code, todayDate).combinedCode
+                            LetterCodeGenerator.generate(empData.code, effectiveLetterDate).combinedCode
                         } catch (_: Exception) { "" }
 
                         val pdfBytes = LetterPdfService.generateLetterPdf(
                             formattedHtmlBody = finalHtmlBody,
                             refNo = "ADH/HR/${empData.code}/${index + 1}",
-                            date = todayDate,
+                            date = effectiveLetterDate,
                             secretCode = secretCode
                         )
 
@@ -1218,7 +1243,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
                         val fileNameRaw = letterConfig.filenameformat.takeIf { it.isNotBlank() } ?: "${safeCode}_Letter_${row.letter}"
                         val resolvedFileName = BulkLetterService.applyPlaceholders(
-                            fileNameRaw, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                            fileNameRaw, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true, overrideTodayDate = effectiveLetterDate
                         ).let { if (it.endsWith(".pdf", ignoreCase = true)) it else "$it.pdf" }
 
                         var attachmentLink = ""
@@ -1236,10 +1261,10 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         } catch (_: Exception) {}
 
                         val resolvedSubject = BulkLetterService.applyPlaceholders(
-                            letterConfig.subject, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                            letterConfig.subject, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true, overrideTodayDate = effectiveLetterDate
                         )
                         val resolvedBody = BulkLetterService.applyPlaceholders(
-                            letterConfig.body, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                            letterConfig.body, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true, overrideTodayDate = effectiveLetterDate
                         )
                         val resolvedToMail = BulkLetterService.resolveEmailField(conn, letterConfig.tomail, empData)
                         val resolvedCcMail = BulkLetterService.resolveEmailField(conn, letterConfig.ccmail, empData)
@@ -1258,13 +1283,13 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
 
                         if (letterConfig.recupdate.isNotBlank()) {
                             val resolvedRecUpdate = BulkLetterService.applyPlaceholders(
-                                letterConfig.recupdate, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true
+                                letterConfig.recupdate, empData, row, responsibleBranches, probationPeriod, resolvedWef, isEmailField = true, overrideTodayDate = effectiveLetterDate
                             )
                             BulkLetterService.appendStaffHistoryComment(
                                 conn = conn,
                                 empCode = row.code,
                                 resolvedRecUpdate = resolvedRecUpdate,
-                                todayDate = todayDate
+                                todayDate = effectiveLetterDate
                             )
                         }
 
