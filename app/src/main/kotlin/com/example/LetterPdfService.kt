@@ -92,6 +92,10 @@ object LetterPdfService {
             .charset(Charsets.UTF_8)
             .prettyPrint(false)
 
+        doc.body().select("style").forEach { styleEl ->
+            doc.head().appendChild(styleEl)
+        }
+
         val validHtml = doc.html()
             .replace(Regex("(?i)<!doctype\\s+html>"), "")
             .replace("/*<![CDATA[*/", "")

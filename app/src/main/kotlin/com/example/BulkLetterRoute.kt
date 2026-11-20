@@ -943,7 +943,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                 call.respondText(previewHtml, ContentType.Text.Html, HttpStatusCode.OK)
             }
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Preview failed")))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Preview failed"))
         }
     }
 
@@ -1019,7 +1019,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                             """
                             CREATE TABLE IF NOT EXISTS bulkletter (
                                 lettercode TEXT,
-                                templete TEXT,
+                                telete TEXT,
                                 filenameformat TEXT,
                                 subject TEXT,
                                 body TEXT,
@@ -1280,9 +1280,21 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         val letterConfig = BulkLetterService.fetchLetterConfigFromDb(conn, row.letter)
                             ?: error("Letter template not found for lettercode: ${row.letter}")
 
+                        val isOfferOrAppointment = letterConfig.lettercode.contains("offer", ignoreCase = true) ||
+                            letterConfig.lettercode.contains("appointment", ignoreCase = true) ||
+                            letterConfig.filenameformat.contains("offer", ignoreCase = true) ||
+                            letterConfig.filenameformat.contains("appointment", ignoreCase = true) ||
+                            letterConfig.subject.contains("offer", ignoreCase = true) ||
+                            letterConfig.subject.contains("appointment", ignoreCase = true) ||
+                            letterConfig.templete.contains("offer", ignoreCase = true) ||
+                            letterConfig.templete.contains("appointment", ignoreCase = true)
+
                         val resolvedWef = row.wef?.takeIf { it.isNotBlank() }
-                            ?: letterConfig.wef.takeIf { it.isNotBlank() }
-                            ?: todayDate
+                            ?: if (isOfferOrAppointment) {
+                                BulkLetterService.calculateInterviewDate(empData.doj).ifBlank { empData.doj }
+                            } else {
+                                letterConfig.wef.takeIf { it.isNotBlank() } ?: todayDate
+                            }
 
                         val requiresDol = row.letter.trim() == "21" ||
                             letterConfig.templete.contains("{9}") ||
@@ -1296,15 +1308,6 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         val targetDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: empData.designation
                         val probationPeriod = BulkLetterService.fetchProbationDays(conn, targetDesignation)
                         val responsibleBranches = BulkLetterService.fetchResponsibleBranches(conn, row.code)
-
-                        val isOfferOrAppointment = letterConfig.lettercode.contains("offer", ignoreCase = true) ||
-                            letterConfig.lettercode.contains("appointment", ignoreCase = true) ||
-                            letterConfig.filenameformat.contains("offer", ignoreCase = true) ||
-                            letterConfig.filenameformat.contains("appointment", ignoreCase = true) ||
-                            letterConfig.subject.contains("offer", ignoreCase = true) ||
-                            letterConfig.subject.contains("appointment", ignoreCase = true) ||
-                            letterConfig.templete.contains("offer", ignoreCase = true) ||
-                            letterConfig.templete.contains("appointment", ignoreCase = true)
 
                         val effectiveLetterDate = if (isOfferOrAppointment && empData.doj.isNotBlank()) empData.doj else todayDate
 
@@ -1386,7 +1389,7 @@ fun Route.bulkLetterRoutes(dbConnectionProvider: () -> Connection) {
                         }
 
                         generatedPdfs.add(resolvedFileName to pdfBytes)
-                    } catch (rowEx:Exception) {
+                    } catch (rowEx: Exception) {
                         skippedErrors.add(SkippedLetterError(code = row.code, letter = row.letter, reason = rowEx.message ?: "Processing error"))
                     }
                 }
