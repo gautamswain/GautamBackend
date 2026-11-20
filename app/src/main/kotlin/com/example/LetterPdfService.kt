@@ -36,10 +36,7 @@ object LetterPdfService {
             ?.readText(Charsets.UTF_8)
             ?: error("adhikar_letterhead.html not found in src/main/resources/templates/!")
 
-        val signDataUri = if (signBase64.isNotBlank()) "data:image/png;base64,$signBase64" else ""
-        val bodyWithSign = formattedHtmlBody
-            .replace("{{signBase64}}", signDataUri)
-            .replace("{{signatureImg}}", if (signDataUri.isNotBlank()) "<img src=\"$signDataUri\" alt=\"Signature\" style=\"height: 40px; width: auto;\" />" else "")
+        val bodyWithSign = formattedHtmlBody.replace("{{signBase64}}", signBase64)
 
         val hasOwnHeader = formattedHtmlBody.contains("Ref No", ignoreCase = true) ||
             formattedHtmlBody.contains("Dept", ignoreCase = true) ||
@@ -90,12 +87,18 @@ object LetterPdfService {
 
         val doc = org.jsoup.Jsoup.parse(html)
         doc.outputSettings()
-            .syntax(org.jsoup.nodes.Document.OutputSettings.Syntax.html)
+            .syntax(org.jsoup.nodes.Document.OutputSettings.Syntax.xml)
             .escapeMode(org.jsoup.nodes.Entities.EscapeMode.xhtml)
             .charset(Charsets.UTF_8)
-            .prettyPrint(true)
+            .prettyPrint(false)
 
         val validHtml = doc.html()
+            .replace(Regex("(?i)<!doctype\\s+html>"), "")
+            .replace("/*<![CDATA[*/", "")
+            .replace("/*]]>*/", "")
+            .replace("<![CDATA[", "")
+            .replace("]]>", "")
+            .trim()
 
         val outputStream = ByteArrayOutputStream()
         PdfRendererBuilder()
