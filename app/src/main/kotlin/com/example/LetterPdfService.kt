@@ -25,6 +25,21 @@ object LetterPdfService {
         }
     }
 
+    private val presidentSignBase64: String by lazy {
+        try {
+            val signBytes = this::class.java.classLoader
+                .getResourceAsStream("static/presidentsir.png")
+                ?.use { it.readBytes() }
+            if (signBytes != null && signBytes.isNotEmpty()) {
+                Base64.getEncoder().encodeToString(signBytes)
+            } else {
+                ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     fun generateLetterPdf(
         formattedHtmlBody: String,
         refNo: String,
@@ -36,7 +51,14 @@ object LetterPdfService {
             ?.readText(Charsets.UTF_8)
             ?: error("adhikar_letterhead.html not found in src/main/resources/templates/!")
 
-        val bodyWithSign = formattedHtmlBody.replace("{{signBase64}}", signBase64)
+        val signDataUri = if (signBase64.isNotBlank()) "data:image/png;base64,$signBase64" else ""
+        val presidentSignDataUri = if (presidentSignBase64.isNotBlank()) "data:image/png;base64,$presidentSignBase64" else ""
+
+        val bodyWithSign = formattedHtmlBody
+            .replace("{{signBase64}}", signDataUri)
+            .replace("{{signatureImg}}", if (signDataUri.isNotBlank()) "<img src=\"$signDataUri\" alt=\"Signature\" style=\"height: 40px; width: auto;\" />" else "")
+            .replace("{{HR_MANAGER_SIGNATURE}}", signDataUri)
+            .replace("{{PRESIDENT_SIGNATURE}}", presidentSignDataUri)
 
         val hasOwnHeader = formattedHtmlBody.contains("Ref No", ignoreCase = true) ||
             formattedHtmlBody.contains("Dept", ignoreCase = true) ||
@@ -93,7 +115,14 @@ object LetterPdfService {
             .prettyPrint(false)
 
         doc.body().select("style").forEach { styleEl ->
-            doc.head().appendChild(styleEl)
+            val cleanedCss = styleEl.data()
+                .replace(Regex("@page\\s*\\{[^}]*\\}", RegexOption.IGNORE_CASE), "")
+            if (cleanedCss.isNotBlank()) {
+                styleEl.text(cleanedCss)
+                doc.head().appendChild(styleEl)
+            } else {
+                styleEl.remove()
+            }
         }
 
         val validHtml = doc.html()
