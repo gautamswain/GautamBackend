@@ -398,6 +398,10 @@ object BulkLetterService {
         val ddmmyy = LocalDate.now(istZone).format(DateTimeFormatter.ofPattern("ddMMyy"))
         val interviewDate = calculateInterviewDate(emp.doj)
 
+        val isOfferOrAppointment = rawTemplate.contains("offer", ignoreCase = true) || rawTemplate.contains("appointment", ignoreCase = true)
+        val effectiveLetterDate = if (isOfferOrAppointment && emp.doj.isNotBlank()) emp.doj else todayDate
+        val effectiveInterviewDate = if (isOfferOrAppointment && emp.doj.isNotBlank()) emp.doj else interviewDate
+
         val effectiveBranch = row.dBranch?.takeIf { it.isNotBlank() } ?: emp.branch
         val effectiveAddress = row.address?.takeIf { it.isNotBlank() } ?: emp.presentAddress
         val effectiveDesignation = row.promoTo?.takeIf { it.isNotBlank() } ?: emp.designation
@@ -420,10 +424,12 @@ object BulkLetterService {
         val fatherVal = emp.fatherName.ifBlank { "Father's Name Missing" }
         val addrVal = effectiveAddress.ifBlank { "Address Missing" }
         val mobVal = emp.mobileNo.ifBlank { "Mobile No Missing" }
-        val respBrVal = responsibleBranches.ifBlank { "Responsible Branches Missing" }
-        val intDateVal = interviewDate.ifBlank { "Interview Date Missing" }
+        val respBrVal = responsibleBranches.ifBlank { emp.branch.ifBlank { "Branch Missing" } }
+        val intDateVal = effectiveInterviewDate.ifBlank { "Interview Date Missing" }
 
-        val replaced = rawTemplate
+        val processedTemplate = rawTemplate.replace(Regex("\\{X\\}", RegexOption.IGNORE_CASE), "<br/><br/>")
+
+        val replaced = processedTemplate
             .replace("{1}", mapper(nameVal))
             .replace("{2}", mapper(codeVal))
             .replace("{3}", mapper(deptVal))
@@ -440,7 +446,7 @@ object BulkLetterService {
             .replace("{18}", mapper(emp.hisHer))
             .replace("{17_lower}", mapper(emp.heShe.lowercase()))
             .replace("{18_lower}", mapper(emp.hisHer.lowercase()))
-            .replace("{19}", mapper(todayDate))
+            .replace("{19}", mapper(effectiveLetterDate))
             .replace("{20}", mapper(respBrVal))
             .replace("{21}", mapper(intDateVal))
             .replace("{emp_mail}", mapper(emp.email))

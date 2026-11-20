@@ -38,6 +38,28 @@ object LetterPdfService {
 
         val bodyWithSign = formattedHtmlBody.replace("{{signBase64}}", signBase64)
 
+        val hasOwnHeader = formattedHtmlBody.contains("Ref No", ignoreCase = true) ||
+            formattedHtmlBody.contains("Dept", ignoreCase = true) ||
+            formattedHtmlBody.contains("Date:", ignoreCase = true) ||
+            formattedHtmlBody.contains("Adhikar Finance", ignoreCase = true)
+
+        val headerBlock = if (hasOwnHeader) {
+            ""
+        } else {
+            """
+            <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #E65100; padding-bottom: 5px;">
+                <img src="${BrandAssets.logoDataUri}" alt="Adhikar Logo" style="height: 40px; width: auto;" />
+                <div style="font-size: 14px; font-weight: bold; color: #E65100; margin-top: 4px;">Adhikar Finance</div>
+            </div>
+            <table class="meta-table">
+                <tr>
+                    <td style="text-align:left;">Ref No: $refNo</td>
+                    <td style="text-align:right;">Date: $date</td>
+                </tr>
+            </table>
+            """.trimIndent()
+        }
+
         val secretCodeFooter = if (secretCode.isNotBlank()) {
             val qrUri = BrandAssets.generateQrDataUri(secretCode)
             val qrImg = if (qrUri.isNotBlank()) """<img src="$qrUri" alt="QR" style="width: 50px; height: 50px;" />""" else ""
@@ -58,10 +80,8 @@ object LetterPdfService {
         }
 
         html = html
-            .replace("{{logoDataUri}}", BrandAssets.logoDataUri)
+            .replace("{{headerBlock}}", headerBlock)
             .replace("{{bgBase64}}", bgBase64)
-            .replace("{{refNo}}", refNo)
-            .replace("{{date}}", date)
             .replace("{{formattedHtmlBody}}", bodyWithSign)
             .replace("{{secretCodeFooter}}", secretCodeFooter)
 
@@ -70,7 +90,14 @@ object LetterPdfService {
             .syntax(org.jsoup.nodes.Document.OutputSettings.Syntax.xml)
             .escapeMode(org.jsoup.nodes.Entities.EscapeMode.xhtml)
             .charset(Charsets.UTF_8)
-        val validXhtml = doc.html()
+        var validXhtml = doc.html()
+
+        // Strip JSoup CDATA wrappers around <style>
+        validXhtml = validXhtml
+            .replace("/*<![CDATA[*/", "")
+            .replace("/*]]>*/", "")
+            .replace("&lt;![CDATA[", "")
+            .replace("--&gt;]]&gt;", "")
 
         val outputStream = ByteArrayOutputStream()
         PdfRendererBuilder()
