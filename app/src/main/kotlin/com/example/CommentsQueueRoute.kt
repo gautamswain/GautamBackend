@@ -11,12 +11,14 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import java.net.HttpURLConnection
 import java.net.URL
+import java.sql.Connection
+import java.util.Locale
 
 typealias CommentRecordMap = Map<String, String>
 
 private fun triggerReportMeServiceAsync() {
     CoroutineScope(Dispatchers.IO).launch {
-        var reportConn: java.sql.Connection? = null
+        var reportConn: Connection? = null
         try {
             reportConn = TursoDatabaseService.getConnection()
             if (reportConn != null) {
@@ -82,6 +84,51 @@ private fun executeTursoHttpSql(sql: String, args: List<String> = emptyList()): 
     return (!hasSqlError) to resp
 }
 
+fun resolveDesignationFromDb(conn: Connection, rawDesignation: String): String {
+    val clean = rawDesignation.trim()
+    if (clean.isBlank()) return ""
+
+    val shtcodeMap = mutableMapOf<String, String>()
+    val fullDesignationMap = mutableMapOf<String, String>()
+
+    try {
+        conn.createStatement().use { stmt ->
+            stmt.executeQuery("SELECT designation, shtcode FROM Designation").use { rs ->
+                while (rs.next()) {
+                    val desig = rs.getString("designation")?.trim().orEmpty()
+                    val sht = rs.getString("shtcode")?.trim().orEmpty()
+                    if (desig.isNotBlank()) {
+                        fullDesignationMap[desig.lowercase()] = desig
+                        fullDesignationMap[desig.lowercase().replace(Regex("[^a-z0-9]"), "")] = desig
+
+                        if (sht.isNotBlank()) {
+                            val aliases = sht.split(Regex("[,/|;]+"))
+                            for (alias in aliases) {
+                                val cleanAlias = alias.trim().lowercase().replace(".", "")
+                                if (cleanAlias.isNotBlank()) {
+                                    shtcodeMap[cleanAlias] = desig
+                                    shtcodeMap[cleanAlias.replace(Regex("[^a-z0-9]"), "")] = desig
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch (_: Exception) {}
+
+    val normalized = clean.lowercase().replace(".", "").replace(Regex("\\s+"), " ").trim()
+    val alphanumericKey = normalized.replace(Regex("[^a-z0-9]"), "")
+
+    return shtcodeMap[normalized]
+        ?: shtcodeMap[alphanumericKey]
+        ?: fullDesignationMap[clean.lowercase()]
+        ?: fullDesignationMap[alphanumericKey]
+        ?: clean.lowercase().split(Regex("\\s+")).joinToString(" ") { word ->
+            word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ENGLISH) else it.toString() }
+        }
+}
+
 fun Route.commentsQueueRoute() {
 
     // 1. Add any record (MUP / NewJ / RewJ / MSG) to Comments Queue
@@ -106,6 +153,35 @@ fun Route.commentsQueueRoute() {
                 ?: java.time.LocalDate.now().toString()).ifBlank { java.time.LocalDate.now().toString() }
 
             var matchedOldCode = ""
+
+            if (separater.equals("MUP", ignoreCase = true)) {
+                val conn = TursoDatabaseService.getConnection()
+                if (conn != null) {
+                    try {
+                        val detailsObj = Json.parseToJsonElement(jsonDetails).jsonObject
+                        val updatedMap = detailsObj.toMutableMap()
+                        var modified = false
+                        for ((k, v) in detailsObj) {
+                            val keyLower = k.lowercase()
+                            if (keyLower.contains("designation") || keyLower == "designation_7") {
+                                val rawDesig = v.jsonPrimitive.contentOrNull.orEmpty()
+                                if (rawDesig.isNotBlank()) {
+                                    val resolved = resolveDesignationFromDb(conn, rawDesig)
+                                    updatedMap[k] = JsonPrimitive(resolved)
+                                    modified = true
+                                }
+                            }
+                        }
+                        if (modified) {
+                            jsonDetails = JsonObject(updatedMap).toString()
+                        }
+                    } catch (e: Exception) {
+                        println("MUP DESIGNATION RESOLUTION WARNING: ${e.message}")
+                    } finally {
+                        try { conn.close() } catch (_: Exception) {}
+                    }
+                }
+            }
 
             if (separater.equals("NewJ", ignoreCase = true) || separater.equals("RewJ", ignoreCase = true)) {
                 val conn = TursoDatabaseService.getConnection()
@@ -229,82 +305,73 @@ fun Route.commentsQueueRoute() {
         }
 
         try {
-            val pstmt = if (separater.equals("PENDING", ignoreCase = true) || separater.equals("ALL", ignoreCase = true)) {
-                conn.prepareStatement("SELECT * FROM Comments WHERE separater NOT IN ('CONF', 'REJ') ORDER BY id DESC")
-            } else {
-                val ps = conn.prepareStatement("SELECT * FROM Comments WHERE separater = ? ORDER BY id DESC")
-                ps.setString(1, separater)
-                ps
-            }
-            val rs = pstmt.executeQuery()
+            val list = mutableListOf<CommentRecordMap>()
+            val stmt = conn.createStatement()
+            val rs = stmt.executeQuery("SELECT rowid AS id, slno, separater, jsondetails, wef FROM Comments WHERE UPPER(TRIM(separater)) = UPPER(TRIM('$separater')) ORDER BY rowid DESC;")
+            val meta = rs.metaData
+            val colCount = meta.columnCount
 
-            val records = mutableListOf<CommentRecordMap>()
             while (rs.next()) {
-                val rowId = rs.getString("id") ?: ""
-                val rowSlno = rs.getString("slno") ?: ""
-                val rowSep = rs.getString("separater") ?: ""
-                val rawJson = rs.getString("jsondetails") ?: ""
-                val rowWef = rs.getString("wef") ?: ""
-
-                val displayMsg = when {
-                    rowSep.equals("NewJ", ignoreCase = true) -> {
-                        try {
-                            val obj = Json.parseToJsonElement(rawJson).jsonObject
-                            val empName = (obj["emp_name"]?.jsonPrimitive?.contentOrNull
-                                ?: obj["empName"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
-                            val designation = obj["designation"]?.jsonPrimitive?.contentOrNull.orEmpty().trim()
-                            val branchName = (obj["branch_name"]?.jsonPrimitive?.contentOrNull
-                                ?: obj["branchName"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
-                            "Approval for NewJoining- Mr. $empName, $designation, $branchName- Proceed"
-                        } catch (_: Exception) {
-                            rawJson
-                        }
-                    }
-                    rowSep.equals("RewJ", ignoreCase = true) -> {
-                        try {
-                            val obj = Json.parseToJsonElement(rawJson).jsonObject
-                            val empName = (obj["emp_name"]?.jsonPrimitive?.contentOrNull
-                                ?: obj["empName"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
-                            val designation = obj["designation"]?.jsonPrimitive?.contentOrNull.orEmpty().trim()
-                            val branchName = (obj["branch_name"]?.jsonPrimitive?.contentOrNull
-                                ?: obj["branchName"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
-                            val oldCode = (obj["Code_2"]?.jsonPrimitive?.contentOrNull
-                                ?: obj["existing_emp_id"]?.jsonPrimitive?.contentOrNull).orEmpty().trim()
-                            "Rejaining Mr $empName at $branchName Branch as $designation on existing Code $oldCode - Click to proceed"
-                        } catch (_: Exception) {
-                            rawJson
-                        }
-                    }
-                    else -> rawJson
+                val map = mutableMapOf<String, String>()
+                for (i in 1..colCount) {
+                    val colName = meta.getColumnName(i)
+                    val colVal = rs.getString(i) ?: ""
+                    map[colName] = colVal
                 }
+                val jsonStr = map["jsondetails"] ?: ""
+                var displayMsg = ""
 
-                records.add(
-                    mapOf(
-                        "id" to rowId,
-                        "slno" to rowSlno,
-                        "separater" to rowSep,
-                        "jsondetails" to rawJson,
-                        "display_message" to displayMsg,
-                        "wef" to DateUtils.toDisplayDate(rowWef)
-                    )
-                )
+                if (jsonStr.isNotBlank()) {
+                    try {
+                        val jsonElement = Json.parseToJsonElement(jsonStr)
+                        if (jsonElement is JsonObject) {
+                            val empName = jsonElement["emp_name"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["empName"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["employee_name_3"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["name"]?.jsonPrimitive?.contentOrNull
+                                ?: "Employee"
+                            val code2 = jsonElement["Code_2"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["code"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["empId"]?.jsonPrimitive?.contentOrNull
+                                ?: ""
+                            val branch = jsonElement["branch_name"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["branchName"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["branch_name_9"]?.jsonPrimitive?.contentOrNull
+                                ?: ""
+                            val desig = jsonElement["designation"]?.jsonPrimitive?.contentOrNull
+                                ?: jsonElement["designation_7"]?.jsonPrimitive?.contentOrNull
+                                ?: ""
+
+                            displayMsg = when (separater.uppercase()) {
+                                "NEWJ" -> "New Joining: $empName ($code2) at $branch as $desig"
+                                "REWJ" -> "Re-Joining: $empName ($code2) at $branch as $desig"
+                                "MUP" -> "Master Update: $empName ($code2) - Desig: $desig"
+                                else -> "Event: $empName ($code2)"
+                            }
+                        }
+                    } catch (_: Exception) {
+                        displayMsg = jsonStr
+                    }
+                }
+                map["display_message"] = displayMsg
+                list.add(map)
             }
             rs.close()
-            pstmt.close()
+            stmt.close()
             conn.close()
 
-            call.respond(records)
+            call.respond(HttpStatusCode.OK, list)
         } catch (e: Exception) {
             try { conn.close() } catch (_: Exception) {}
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch comments")))
         }
     }
 
-    // 3A. STAGE 2A: Confirm NewJ ->
-    //     a) Cross-verify last 5th row + 5 AND last 3rd row + 3 for sl_no_1 & Code_2 (ADKRXXXX)
-    //     b) Insert into MasterData with generated Code_2 and emp_status_35='1', emp_status_temp_36='1', slary_37='1'
-    //     c) Update existing NewJ comment row separater = 'CONF'
-    //     d) Append new MSG row & run ReportMeService in background
+    // 3A. STAGE 2A: Confirm NewJ (1-Click New Joining) ->
+    //     a) Fetch jsonDetails from Comments table
+    //     b) Insert into MasterData with generated Code_2 and emp_status_35='1', emp_status_temp_36='1'
+    //     c) Update existing NewJ comment row -> CONF
+    //     d) Post MSG & run ReportMeService in background
     post("/api/turso/confirm-newj/{id}") {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
@@ -313,110 +380,90 @@ fun Route.commentsQueueRoute() {
             ?: return@post call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
 
         try {
-            var jsonDetails = ""
+            var storedJson = ""
             var wefDate = java.time.LocalDate.now().toString()
 
             val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE id = ?")
             selectPs.setString(1, commentId)
             val rs = selectPs.executeQuery()
             if (rs.next()) {
-                jsonDetails = rs.getString("jsondetails") ?: ""
-                val dbWef = rs.getString("wef") ?: ""
-                if (dbWef.isNotBlank()) wefDate = dbWef
+                storedJson = rs.getString("jsondetails") ?: ""
+                wefDate = rs.getString("wef") ?: java.time.LocalDate.now().toString()
             }
             rs.close()
             selectPs.close()
 
-            if (jsonDetails.isBlank()) {
+            if (storedJson.isBlank()) {
                 conn.close()
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "NewJ record not found"))
-                return@post
+                return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Comment details not found"))
             }
 
-            val requestBody = try { call.receiveText() } catch (_: Exception) { "" }
-            val effectiveJson = if (requestBody.trim().startsWith("{")) requestBody else jsonDetails
+            val detailsObj = Json.parseToJsonElement(storedJson).jsonObject
 
-            val obj = Json.parseToJsonElement(effectiveJson).jsonObject
             fun str(vararg keys: String): String {
                 for (k in keys) {
-                    val v = obj[k]?.jsonPrimitive?.contentOrNull?.trim()
+                    val v = detailsObj[k]?.jsonPrimitive?.contentOrNull?.trim()
                     if (!v.isNullOrBlank()) return v
                 }
                 return ""
             }
 
-            val empName = str("emp_name", "empName")
-            val designation = str("designation")
-            val branchName = str("branch_name", "branchName")
-            val dojVal = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
+            val empName = str("emp_name", "empName", "employee_name_3")
+            val fathersName = str("fathers_name", "fathersName", "fathers_name_4")
+            val designation = str("designation", "designation_7")
+            val branchName = str("branch_name", "branchName", "branch_name_9")
 
-            val st = conn.createStatement()
-            val rsRecent = st.executeQuery(
-                "SELECT TRIM(sl_no_1), TRIM(Code_2) FROM MasterData WHERE UPPER(TRIM(Code_2)) LIKE 'ADKR%' ORDER BY rowid DESC LIMIT 5"
-            )
-            val recentRows = mutableListOf<Pair<Int, Int>>()
-            while (rsRecent.next()) {
-                val sNum = rsRecent.getString(1)?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
-                val cRaw = rsRecent.getString(2) ?: ""
-                val cNum = cRaw.replace(Regex("[^0-9]"), "").takeLast(4).toIntOrNull() ?: 0
-                recentRows.add(sNum to cNum)
+            // 1. Generate new Code_2 (ADKRXXXX)
+            var nextNum = 1001
+            val maxCodeStmt = conn.createStatement()
+            val maxCodeRs = maxCodeStmt.executeQuery("SELECT MAX(CAST(SUBSTR(TRIM(Code_2), 5) AS INTEGER)) FROM MasterData WHERE UPPER(TRIM(Code_2)) LIKE 'ADKR%'")
+            if (maxCodeRs.next()) {
+                val m = maxCodeRs.getInt(1)
+                if (m >= 1001) nextNum = m + 1
             }
-            rsRecent.close()
-            st.close()
+            maxCodeRs.close()
+            maxCodeStmt.close()
 
-            if (recentRows.size < 5) {
-                conn.close()
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "MasterData has fewer than 5 rows for sequence check"))
-                return@post
+            val generatedCode = String.format(Locale.ENGLISH, "ADKR%04d", nextNum)
+
+            // Get max slno for comments
+            var nextSlNo = 1
+            val maxSlStmt = conn.createStatement()
+            val maxSlRs = maxSlStmt.executeQuery("SELECT COALESCE(MAX(CAST(slno AS INTEGER)), 0) + 1 FROM Comments")
+            if (maxSlRs.next()) {
+                nextSlNo = maxSlRs.getInt(1)
             }
-
-            val (sl3rd, code3rd) = recentRows[2]
-            val (sl5th, code5th) = recentRows[4]
-
-            val expectedSlFrom3rd = sl3rd + 3
-            val expectedSlFrom5th = sl5th + 5
-
-            val expectedCodeFrom3rd = code3rd + 3
-            val expectedCodeFrom5th = code5th + 5
-
-            if (expectedCodeFrom3rd != expectedCodeFrom5th || expectedSlFrom3rd != expectedSlFrom5th) {
-                conn.close()
-                call.respond(
-                    HttpStatusCode.Conflict,
-                    mapOf(
-                        "error" to "Sequence mismatch in MasterData: 5th-last ($code5th + 5 = $expectedCodeFrom5th) != 3rd-last ($code3rd + 3 = $expectedCodeFrom3rd)"
-                    )
-                )
-                return@post
-            }
-
-            val nextSlNo = expectedSlFrom5th
-            val generatedCode = "ADKR${String.format("%04d", expectedCodeFrom5th)}"
+            maxSlRs.close()
+            maxSlStmt.close()
             conn.close()
+
+            val dojVal = DateUtils.toExcelSerial(wef_or_doj(detailsObj))
 
             val insertMasterSql = """
                 INSERT INTO MasterData (
-                    sl_no_1, Code_2, employee_name_3, fathers_name_4, gender_5, dob_6,
-                    designation_7, branch_name_9, doj_in_adhikar_10, present_address_11,
-                    permanent_address_12, highest_educational_qualification_13,
-                    personal_contact_number_14, contact_no_2_15, aadhar_card_no_16,
-                    pan_card_no_17, bank_name_19, bank_account_number_20,
-                    ifsc_code_bank_branch_name_21, esi_no_22, epf_uan_no_23,
-                    company_name_starting_from_current_to_old_26, interviewed_31,
-                    emp_status_35, emp_status_temp_36, slary_37, email61_personal_52
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', '1', '1', ?)
+                    sl_no_1, Code_2, employee_name_3, fathers_name_4, gender_5, dob_6, designation_7, department_8, branch_name_9, 
+                    doj_in_adhikar_10, present_address_11, permanent_address_12, highest_educational_qualification_13, 
+                    personal_contact_number_14, contact_no_2_15, aadhar_card_no_16, pan_card_no_17, bank_name_19, 
+                    bank_account_number_20, ifsc_code_bank_branch_name_21, esi_no_22, epf_uan_no_23, company_experience_51, 
+                    interviewd_by_56, email61_personal_52, emp_status_35, emp_status_temp_36, slary_37
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', '1', '1'
+                )
             """.trimIndent()
+
+            val designationVal = resolveDesignationFromDb(TursoDatabaseService.getConnection() ?: conn, designation)
 
             val masterArgs = listOf(
                 nextSlNo.toString(),
                 generatedCode,
                 empName,
-                str("fathers_name", "fathersName"),
+                fathersName,
                 str("gender"),
                 DateUtils.toExcelSerial(str("dob")),
-                designation,
+                designationVal,
+                str("department"),
                 branchName,
-                DateUtils.toExcelSerial(str("doj_in_adhikar", "dojInAdhikar")),
+                dojVal,
                 str("present_address", "presentAddress"),
                 str("permanent_address", "permanentAddress"),
                 str("education"),
@@ -446,7 +493,7 @@ fun Route.commentsQueueRoute() {
                 listOf(commentId)
             )
 
-            val joiningMsg = "Mr. $empName Joined at $branchName branch as $designation - Code- $generatedCode"
+            val joiningMsg = "Mr. $empName Joined at $branchName branch as $designationVal - Code- $generatedCode"
             val (msgOk, msgResp) = executeTursoHttpSql(
                 "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)",
                 listOf(nextSlNo.toString(), "MSG", joiningMsg, dojVal)
@@ -471,7 +518,6 @@ fun Route.commentsQueueRoute() {
                 )
             )
         } catch (e: Exception) {
-            try { conn.close() } catch (_: Exception) {}
             e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Confirm NewJ failed")))
         }
@@ -497,59 +543,52 @@ fun Route.commentsQueueRoute() {
             val rs = selectPs.executeQuery()
             if (rs.next()) {
                 storedJson = rs.getString("jsondetails") ?: ""
-                val dbWef = rs.getString("wef") ?: ""
-                if (dbWef.isNotBlank()) wefDate = dbWef
+                wefDate = rs.getString("wef") ?: java.time.LocalDate.now().toString()
             }
             rs.close()
             selectPs.close()
-            conn.close()
 
             if (storedJson.isBlank()) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "RewJ record not found"))
-                return@post
+                conn.close()
+                return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Comment details not found"))
             }
 
-            val obj = Json.parseToJsonElement(storedJson).jsonObject
+            val detailsObj = Json.parseToJsonElement(storedJson).jsonObject
+
             fun str(vararg keys: String): String {
                 for (k in keys) {
-                    val v = obj[k]?.jsonPrimitive?.contentOrNull?.trim()
+                    val v = detailsObj[k]?.jsonPrimitive?.contentOrNull?.trim()
                     if (!v.isNullOrBlank()) return v
                 }
                 return ""
             }
 
+            val empName = str("emp_name", "empName", "employee_name_3")
+            val branchName = str("branch_name", "branchName", "branch_name_9")
+            val designation = str("designation", "designation_7")
             val existingEmpId = str("Code_2", "existing_emp_id", "empId")
-            val empName = str("emp_name", "empName")
-            val designation = str("designation")
-            val branchName = str("branch_name", "branchName")
-            val rawDoj = str("doj_in_adhikar", "dojInAdhikar").ifBlank { wefDate }
-            val dojVal = DateUtils.toExcelSerial(rawDoj)
 
-            if (existingEmpId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing existing Code in RewJ record"))
-                return@post
-            }
+            val dojVal = DateUtils.toExcelSerial(wef_or_doj(detailsObj))
+            val designationVal = resolveDesignationFromDb(conn, designation)
 
-            val setParts = mutableListOf(
-                "emp_status_35 = '1'",
-                "emp_status_temp_36 = '1'",
-                "slary_37 = '1'",
-                "mast_rem_38 = COALESCE(NULLIF(TRIM(mast_rem_38), ''), '') || ' | Re-joined on ' || ?"
-            )
-            val args = mutableListOf(dojVal)
+            val args = mutableListOf<String>()
+            val setParts = mutableListOf<String>()
 
-            fun addIfPresent(colName: String, value: String) {
+            fun addIfPresent(col: String, value: String) {
                 if (value.isNotBlank()) {
-                    setParts.add("$colName = ?")
+                    setParts.add("$col = ?")
                     args.add(value)
                 }
             }
 
+            addIfPresent("emp_status_35", "1")
+            addIfPresent("emp_status_temp_36", "1")
+            addIfPresent("slary_37", "1")
             addIfPresent("employee_name_3", empName)
             addIfPresent("fathers_name_4", str("fathers_name", "fathersName"))
             addIfPresent("gender_5", str("gender"))
             addIfPresent("dob_6", DateUtils.toExcelSerial(str("dob")))
-            addIfPresent("designation_7", designation)
+            addIfPresent("designation_7", designationVal)
             addIfPresent("branch_name_9", branchName)
             addIfPresent("doj_in_adhikar_10", dojVal)
             addIfPresent("present_address_11", str("present_address", "presentAddress"))
@@ -578,7 +617,7 @@ fun Route.commentsQueueRoute() {
 
             executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE id = ?", listOf(commentId))
 
-            val rejoinMsg = "Mr $empName at $branchName Branch as $designation rejained confirmed"
+            val rejoinMsg = "Mr $empName at $branchName Branch as $designationVal rejained confirmed"
             val (msgOk, msgResp) = executeTursoHttpSql(
                 "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)",
                 listOf("0", "MSG", rejoinMsg, dojVal)
@@ -629,13 +668,23 @@ fun Route.commentsQueueRoute() {
             }
             rs.close()
             selectPs.close()
-            conn.close()
 
             if (separater == "MUP" && jsonDetails.isNotBlank()) {
                 val obj = Json.parseToJsonElement(jsonDetails).jsonObject
                 val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
                 val skipCols = setOf("id", "sl_no_1", "Code_2", "employee_name_3")
-                val updates = obj.filterKeys { it !in skipCols && it.matches(Regex("^[a-zA-Z0-9_]+$")) }
+                val updates = obj.filterKeys { it !in skipCols && it.matches(Regex("^[a-zA-Z0-9_]+$")) }.toMutableMap()
+
+                for ((k, v) in updates) {
+                    val keyLower = k.lowercase()
+                    if (keyLower.contains("designation") || keyLower == "designation_7") {
+                        val rawDesig = v.jsonPrimitive.contentOrNull.orEmpty()
+                        if (rawDesig.isNotBlank()) {
+                            val resolved = resolveDesignationFromDb(conn, rawDesig)
+                            updates[k] = JsonPrimitive(resolved)
+                        }
+                    }
+                }
 
                 if (empCode.isNotBlank() && updates.isNotEmpty()) {
                     val setClause = updates.keys.joinToString(", ") { "$it = ?" }
@@ -643,6 +692,7 @@ fun Route.commentsQueueRoute() {
                     executeTursoHttpSql("UPDATE MasterData SET $setClause WHERE LOWER(TRIM(Code_2)) = LOWER(TRIM(?))", args)
                 }
             }
+            conn.close()
 
             executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE id = ?", listOf(commentId))
 
@@ -668,4 +718,15 @@ fun Route.commentsQueueRoute() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Reject failed: $resp"))
         }
     }
+}
+
+private fun wef_or_doj(obj: JsonObject): String {
+    fun s(vararg keys: String): String {
+        for (k in keys) {
+            val v = obj[k]?.jsonPrimitive?.contentOrNull?.trim()
+            if (!v.isNullOrBlank()) return v
+        }
+        return ""
+    }
+    return s("wef", "doj_in_adhikar", "dojInAdhikar", "doj", "doj_in_branch", "dojInBranch")
 }

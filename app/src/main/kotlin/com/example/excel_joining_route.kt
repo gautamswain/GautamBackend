@@ -126,7 +126,7 @@ object MasterDataRepository {
 }
 
 fun Route.newJoiningRouting() {
-    post("/api/turso/upload-new-joining") {
+    post("/api/turso/newjoining") {
         val multipart = call.receiveMultipart()
         val employeeList = mutableListOf<NewJMasterDto>()
         val formatter = DataFormatter()
@@ -135,9 +135,28 @@ fun Route.newJoiningRouting() {
         val officialBranches = MasterDataRepository.getOfficialBranches()
         val branchLookup = officialBranches.associateBy { it.lowercase().replace(Regex("[^a-z0-9]"), "") }
 
-        // Load official designations dynamically and build normalized lookup map
+        // Load official designations dynamically and build normalized lookup maps (shtcodeMap & fullDesignationMap)
         val officialDesignations = MasterDataRepository.getOfficialDesignations()
-        val designationLookup = officialDesignations.associateBy { it.designation.lowercase().replace(Regex("[^a-z0-9]"), "") }
+        val shtcodeMap = mutableMapOf<String, String>()
+        val fullDesignationMap = mutableMapOf<String, String>()
+
+        for (ent in officialDesignations) {
+            if (ent.designation.isNotBlank()) {
+                fullDesignationMap[ent.designation.lowercase()] = ent.designation
+                fullDesignationMap[ent.designation.lowercase().replace(Regex("[^a-z0-9]"), "")] = ent.designation
+
+                if (ent.shtcode.isNotBlank()) {
+                    val aliases = ent.shtcode.split(Regex("[,/|;]+"))
+                    for (alias in aliases) {
+                        val cleanAlias = alias.trim().lowercase().replace(".", "")
+                        if (cleanAlias.isNotBlank()) {
+                            shtcodeMap[cleanAlias] = ent.designation
+                            shtcodeMap[cleanAlias.replace(Regex("[^a-z0-9]"), "")] = ent.designation
+                        }
+                    }
+                }
+            }
+        }
 
         // Helper function to rectify and standardize branch name
         fun rectifyBranchName(rawBranch: String): String {
@@ -150,12 +169,17 @@ fun Route.newJoiningRouting() {
                 }
         }
 
-        // Helper function to rectify and standardize designation against Designation table
+        // Helper function to rectify and standardize designation against Designation table (supporting shtcode aliases)
         fun rectifyDesignation(rawDesignation: String): String {
             val clean = rawDesignation.trim()
             if (clean.isBlank()) return ""
-            val key = clean.lowercase().replace(Regex("[^a-z0-9]"), "")
-            return designationLookup[key]?.designation 
+            val normalized = clean.lowercase().replace(".", "").replace(Regex("\\s+"), " ").trim()
+            val alphanumericKey = normalized.replace(Regex("[^a-z0-9]"), "")
+
+            return shtcodeMap[normalized]
+                ?: shtcodeMap[alphanumericKey]
+                ?: fullDesignationMap[clean.lowercase()]
+                ?: fullDesignationMap[alphanumericKey]
                 ?: officialDesignations.find { it.designation.equals(clean, ignoreCase = true) }?.designation
                 ?: clean.lowercase().split(Regex("\\s+")).joinToString(" ") { word ->
                     word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ENGLISH) else it.toString() }
@@ -194,7 +218,7 @@ fun Route.newJoiningRouting() {
                 DateTimeFormatter.ofPattern("d.M.yyyy"),
                 DateTimeFormatter.ofPattern("dd.MM.yyyy")
             )
-            
+
             for (fmt in formatters) {
                 try {
                     val parsedDate = LocalDate.parse(cleanStr, fmt)

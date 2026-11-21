@@ -122,10 +122,24 @@ private object MasterCache {
             } catch (_: Exception) {}
 
             try {
-                val desigRs = stmt.executeQuery("SELECT designation FROM Designation")
+                val desigRs = stmt.executeQuery("SELECT designation, shtcode FROM Designation")
                 while (desigRs.next()) {
-                    val d = desigRs.getString(1)
-                    if (!d.isNullOrBlank()) designations.add(d.trim().lowercase())
+                    val d = desigRs.getString("designation") ?: ""
+                    val s = desigRs.getString("shtcode") ?: ""
+                    if (d.isNotBlank()) {
+                        designations.add(d.trim().lowercase())
+                        designations.add(d.trim().lowercase().replace(Regex("[^a-z0-9]"), ""))
+                    }
+                    if (s.isNotBlank()) {
+                        val aliases = s.split(Regex("[,/|;]+"))
+                        for (alias in aliases) {
+                            val cleanAlias = alias.trim().lowercase().replace(".", "")
+                            if (cleanAlias.isNotBlank()) {
+                                designations.add(cleanAlias)
+                                designations.add(cleanAlias.replace(Regex("[^a-z0-9]"), ""))
+                            }
+                        }
+                    }
                 }
                 desigRs.close()
             } catch (_: Exception) {}
@@ -241,8 +255,9 @@ fun Route.employeeVerificationRoute() {
             val isBranchValid = cleanBranch.isNotBlank() && (dbBranches.isEmpty() || dbBranches.contains(normalizedBranch))
             val branchMessage = if (isBranchValid) "Branch name is valid." else "Branch name not found in BranchDetails master data."
 
-            val normalizedDesignation = cleanDesignation.lowercase()
-            val isDesignationValid = cleanDesignation.isNotBlank() && (dbDesignations.isEmpty() || dbDesignations.contains(normalizedDesignation))
+            val normalizedDesignation = cleanDesignation.lowercase().replace(".", "").replace(Regex("\\s+"), " ").trim()
+            val desigKey = normalizedDesignation.replace(Regex("[^a-z0-9]"), "")
+            val isDesignationValid = cleanDesignation.isNotBlank() && (dbDesignations.isEmpty() || dbDesignations.contains(cleanDesignation.lowercase()) || dbDesignations.contains(normalizedDesignation) || dbDesignations.contains(desigKey))
             val designationMessage = if (isDesignationValid) "Designation is valid." else "Designation not found in master records."
 
             // Turso MasterData Duplicate Check (Optimized dynamic SQL WHERE query)
