@@ -534,14 +534,12 @@ fun Route.commentsQueueRoute() {
 
         try {
             var storedJson = ""
-            var wefDate = java.time.LocalDate.now().toString()
 
             val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE id = ?")
             selectPs.setString(1, commentId)
             val rs = selectPs.executeQuery()
             if (rs.next()) {
                 storedJson = rs.getString("jsondetails") ?: ""
-                wefDate = rs.getString("wef") ?: java.time.LocalDate.now().toString()
             }
             rs.close()
             selectPs.close()

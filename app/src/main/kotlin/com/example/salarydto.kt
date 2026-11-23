@@ -44,25 +44,25 @@ data class SalaryDto(
     val backSalaryGive: String
 )
 
-fun parseSalaryDto(rs: ResultSet): SalaryDto {
+fun parseSalaryDto(rs: ResultSet): SalaryDto { // { #1 (L1)
     val meta = rs.metaData
     val colMap = mutableMapOf<String, String>()
-    for (i in 1..meta.columnCount) {
+    for (i in 1..meta.columnCount) { // { #2 (L2)
         val colName = meta.getColumnName(i).trim().lowercase().replace("_", "")
         val value = rs.getString(i)?.trim().orEmpty()
-        if (value.isNotBlank()) {
+        if (value.isNotBlank()) { // { #3 (L3)
             colMap[colName] = value
-        }
-    }
+        } // } #3 (L3)
+    } // } #2 (L2)
 
-    fun getCol(vararg candidates: String): String {
-        for (cand in candidates) {
+    fun getCol(vararg candidates: String): String { // { #4 (L2)
+        for (cand in candidates) { // { #5 (L3)
             val key = cand.trim().lowercase().replace("_", "")
             val v = colMap[key]
             if (!v.isNullOrBlank()) return v
-        }
+        } // } #5 (L3)
         return ""
-    }
+    } // } #4 (L2)
 
     return SalaryDto(
         id = getCol("id", "salaryhistoryslno", "slno"),
@@ -103,4 +103,4 @@ fun parseSalaryDto(rs: ResultSet): SalaryDto {
         bankName19 = getCol("bankname19", "bankname", "bank", "bank_name_19"),
         backSalaryGive = getCol("backsalarygive", "backsalary")
     )
-}
+} // } #1 (L1)
