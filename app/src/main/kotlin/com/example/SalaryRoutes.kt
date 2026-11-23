@@ -5,6 +5,7 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.util.pipeline.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -276,52 +277,65 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
     } // } #34 (L2) - post /api/turso/salaryinfo/save
 
     // =========================================================================
-    // 4. GET /api/turso/download-attendance-csv?monthc=M116
+    // 4. GET /api/turso/download-attendance-csv (supports no-param, /{monthc}, or ?monthc=M116)
     // =========================================================================
-    get("/api/turso/download-attendance-csv") { // { #45 (L2) - get /api/turso/download-attendance-csv
-        val targetMonthc = call.request.queryParameters["monthc"]?.trim().orEmpty()
-        if (targetMonthc.isBlank()) { // { #46 (L3) - if targetMonthc.isBlank
-            call.respond(
-                HttpStatusCode.BadRequest,
-                mapOf("error" to "Please provide monthc parameter (e.g. ?monthc=M116)")
-            )
-            return@get
-        } // } #46 (L3) - if targetMonthc.isBlank
+    suspend fun PipelineContext<Unit, ApplicationCall>.handleDownloadAttendanceCsv() { // { #45 (L2) - fun handleDownloadAttendanceCsv
+        val requestedMonthc = (
+            call.parameters["monthc"]
+                ?: call.request.queryParameters["monthc"]
+        )?.trim().orEmpty()
 
         val conn = TursoDatabaseService.getConnection()
-        if (conn == null) { // { #47 (L3) - if conn == null
+        if (conn == null) { // { #46 (L3) - if conn == null
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
-            return@get
-        } // } #47 (L3) - if conn == null
+            return
+        } // } #46 (L3) - if conn == null
 
-        try { // { #48 (L3) - try
-            // Step 1: Fetch totday, sunday, holiday from salaryinfo matching monthc (e.g. M116)
+        try { // { #47 (L3) - try
+            // Step 1: Fetch totday, sunday, holiday from salaryinfo (or latest row if monthc omitted)
+            var resolvedMonthc = requestedMonthc
             var totday = 0
             var sunday = 0
             var holiday = 0
             var foundSal = false
 
-            val salSql = "SELECT totday, sunday, holiday FROM salaryinfo WHERE LOWER(TRIM(monthc)) = LOWER(TRIM(?)) LIMIT 1"
-            conn.prepareStatement(salSql).use { ps -> // { #49 (L4) - ps.use
-                ps.setString(1, targetMonthc)
-                ps.executeQuery().use { rs -> // { #50 (L5) - rs.use
-                    if (rs.next()) { // { #51 (L6) - if rs.next
-                        foundSal = true
-                        totday = rs.getString("totday")?.trim()?.toIntOrNull() ?: 0
-                        sunday = rs.getString("sunday")?.trim()?.toIntOrNull() ?: 0
-                        holiday = rs.getString("holiday")?.trim()?.toIntOrNull() ?: 0
-                    } // } #51 (L6) - if rs.next
-                } // } #50 (L5) - rs.use
-            } // } #49 (L4) - ps.use
+            if (requestedMonthc.isNotBlank()) { // { #48 (L4) - if requestedMonthc.isNotBlank
+                val salSql = "SELECT monthc, totday, sunday, holiday FROM salaryinfo WHERE LOWER(TRIM(monthc)) = LOWER(TRIM(?)) LIMIT 1"
+                conn.prepareStatement(salSql).use { ps -> // { #49 (L5) - ps.use
+                    ps.setString(1, requestedMonthc)
+                    ps.executeQuery().use { rs -> // { #50 (L6) - rs.use
+                        if (rs.next()) { // { #51 (L7) - if rs.next
+                            foundSal = true
+                            resolvedMonthc = rs.getString("monthc")?.trim().orEmpty().ifBlank { requestedMonthc }
+                            totday = rs.getString("totday")?.trim()?.toIntOrNull() ?: 0
+                            sunday = rs.getString("sunday")?.trim()?.toIntOrNull() ?: 0
+                            holiday = rs.getString("holiday")?.trim()?.toIntOrNull() ?: 0
+                        } // } #51 (L7) - if rs.next
+                    } // } #50 (L6) - rs.use
+                } // } #49 (L5) - ps.use
+            } else { // } #48 (L4) - if requestedMonthc.isNotBlank / { #52 (L4) - else latest month
+                val latestSql = "SELECT monthc, totday, sunday, holiday FROM salaryinfo ORDER BY rowid DESC LIMIT 1"
+                conn.createStatement().use { stmt -> // { #53 (L5) - stmt.use
+                    stmt.executeQuery(latestSql).use { rs -> // { #54 (L6) - rs.use
+                        if (rs.next()) { // { #55 (L7) - if rs.next
+                            foundSal = true
+                            resolvedMonthc = rs.getString("monthc")?.trim().orEmpty().ifBlank { "LATEST" }
+                            totday = rs.getString("totday")?.trim()?.toIntOrNull() ?: 0
+                            sunday = rs.getString("sunday")?.trim()?.toIntOrNull() ?: 0
+                            holiday = rs.getString("holiday")?.trim()?.toIntOrNull() ?: 0
+                        } // } #55 (L7) - if rs.next
+                    } // } #54 (L6) - rs.use
+                } // } #53 (L5) - stmt.use
+            } // } #52 (L4) - else latest month
 
-            if (!foundSal) { // { #52 (L3) - if !foundSal
+            if (!foundSal) { // { #56 (L4) - if !foundSal
                 conn.close()
                 call.respond(
                     HttpStatusCode.NotFound,
-                    mapOf("error" to "No salaryinfo record found for monthc = $targetMonthc")
+                    mapOf("error" to "No salaryinfo record found${if (requestedMonthc.isNotBlank()) " for monthc = $requestedMonthc" else ""}")
                 )
-                return@get
-            } // } #52 (L3) - if !foundSal
+                return
+            } // } #56 (L4) - if !foundSal
 
             val presentDays = maxOf(0, totday - sunday - holiday)
             val casualLeave = 0
@@ -334,78 +348,160 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
             val totalPaidDays = (presentDays + sunday + holiday +
                 casualLeave + sickLeave + earnedLeave + marriageLeave + maternityLeave + paternityLeave) - lossOfPay
 
-            // Step 2: Fetch 1f (Branch) and 1g (Head Office) from Reports (fields 'f' and 'g')
-            data class StaffEntry(val unitType: String, val groupName: String, val obj: JsonObject)
-            val staffEntries = mutableListOf<StaffEntry>()
+            // Step 2: Fetch 1f (Branch) and 1g (Head Office) from reports (fields 'f' and 'g')
+            data class AttendanceRow(
+                val code: String,
+                val name: String,
+                val designation: String,
+                val department: String,
+                val branch: String,
+                val portfolio: String,
+                val doj: String
+            )
 
-            fun extractStaffFromJsonElement(el: JsonElement, unitType: String, inheritedGroup: String = "") { // { #53 (L3) - fun extractStaffFromJsonElement
-                when (el) { // { #54 (L4) - when el
-                    is JsonPrimitive -> { // { #55 (L5) - is JsonPrimitive
-                        val inner = el.content.trim()
-                        if (inner.startsWith("[") || inner.startsWith("{")) { // { #56 (L6) - if inner.startsWith
-                            runCatching { extractStaffFromJsonElement(Json.parseToJsonElement(inner), unitType, inheritedGroup) }
-                        } // } #56 (L6) - if inner.startsWith
-                    } // } #55 (L5) - is JsonPrimitive
-                    is JsonArray -> { // { #57 (L5) - is JsonArray
-                        el.forEach { child -> extractStaffFromJsonElement(child, unitType, inheritedGroup) }
-                    } // } #57 (L5) - is JsonArray
-                    is JsonObject -> { // { #58 (L5) - is JsonObject
+            val branchCodes = mutableListOf<String>()
+            val hoCodes = mutableListOf<String>()
+            val directRows = mutableListOf<AttendanceRow>()
+
+            fun JsonObject.getField(vararg keys: String): String { // { #57 (L4) - fun getField
+                for (k in keys) { // { #58 (L5) - for keys
+                    val matchKey = this.keys.firstOrNull { it.equals(k, ignoreCase = true) }
+                    if (matchKey != null) { // { #59 (L6) - if matchKey != null
+                        val v = this[matchKey]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (v.isNotBlank()) return v
+                    } // } #59 (L6) - if matchKey != null
+                } // } #58 (L5) - for keys
+                return ""
+            } // } #57 (L4) - fun getField
+
+            fun parseReportField(el: JsonElement, unitType: String, inheritedGroup: String = "") { // { #60 (L4) - fun parseReportField
+                when (el) { // { #61 (L5) - when el
+                    is JsonPrimitive -> { // { #62 (L6) - is JsonPrimitive
+                        val raw = el.content.trim()
+                        if (raw.startsWith("[") || raw.startsWith("{")) { // { #63 (L7) - if raw.startsWith
+                            runCatching { parseReportField(Json.parseToJsonElement(raw), unitType, inheritedGroup) }
+                        } else if (raw.isNotBlank()) { // } #63 (L7) - if raw.startsWith / { #64 (L7) - else if
+                            raw.split(',', '\n', '~', ';').forEach { token -> // { #65 (L8) - forEach token
+                                val c = token.trim().uppercase()
+                                if (c.isNotBlank()) { // { #66 (L9) - if c.isNotBlank
+                                    if (unitType == "Head Office") hoCodes.add(c) else branchCodes.add(c)
+                                } // } #66 (L9) - if c.isNotBlank
+                            } // } #65 (L8) - forEach token
+                        } // } #64 (L7) - else if
+                    } // } #62 (L6) - is JsonPrimitive
+                    is JsonArray -> { // { #67 (L6) - is JsonArray
+                        el.forEach { child -> parseReportField(child, unitType, inheritedGroup) }
+                    } // } #67 (L6) - is JsonArray
+                    is JsonObject -> { // { #68 (L6) - is JsonObject
                         val groupLabel = listOf("branchName", "branch_name", "departmentName", "department")
                             .firstNotNullOfOrNull { k -> el[k]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() } }
                             ?: inheritedGroup
 
                         val nestedList = el["staffList"] ?: el["staff"] ?: el["employees"] ?: el["records"]
-                        if (nestedList is JsonArray) { // { #59 (L6) - if nestedList is JsonArray
-                            nestedList.forEach { emp -> // { #60 (L7) - forEach emp
-                                if (emp is JsonObject) { // { #61 (L8) - if emp is JsonObject
-                                    staffEntries.add(StaffEntry(unitType, groupLabel, emp))
-                                } // } #61 (L8) - if emp is JsonObject
-                            } // } #60 (L7) - forEach emp
-                        } else { // } #59 (L6) - if nestedList is JsonArray / { #62 (L6) - else
-                            staffEntries.add(StaffEntry(unitType, groupLabel, el))
-                        } // } #62 (L6) - else
-                    } // } #58 (L5) - is JsonObject
-                } // } #54 (L4) - when el
-            } // } #53 (L3) - fun extractStaffFromJsonElement
+                        if (nestedList is JsonArray) { // { #69 (L7) - if nestedList is JsonArray
+                            nestedList.forEach { child -> parseReportField(child, unitType, groupLabel) }
+                        } else { // } #69 (L7) - if nestedList is JsonArray / { #70 (L7) - else
+                            val code = el.getField("a3", "Code", "empCode", "Code_2").uppercase()
+                            val name = el.getField("a4", "Name", "empName", "employee_name_3")
+                            if (code.isNotBlank() && name.isBlank()) { // { #71 (L8) - if code only
+                                if (unitType == "Head Office") hoCodes.add(code) else branchCodes.add(code)
+                            } else if (code.isNotBlank() || name.isNotBlank()) { // } #71 (L8) - if code only / { #72 (L8) - else if full obj
+                                directRows.add(
+                                    AttendanceRow(
+                                        code = code,
+                                        name = name,
+                                        designation = el.getField("a8", "Designation", "designation_7"),
+                                        department = el.getField("a9", "Department", "department_8")
+                                            .ifBlank { if (unitType == "Head Office") groupLabel else "Operation" },
+                                        branch = el.getField("a10", "Branch", "branchName", "branch_name_9")
+                                            .ifBlank { groupLabel.ifBlank { unitType } },
+                                        portfolio = el.getField("a52", "PORTFOLIO", "Portfolio", "portfolio_7"),
+                                        doj = el.getField("a11", "DOJ", "dojInAdhikar", "doj_in_adhikar_10")
+                                    )
+                                )
+                            } // } #72 (L8) - else if full obj
+                        } // } #70 (L7) - else
+                    } // } #68 (L6) - is JsonObject
+                } // } #61 (L5) - when el
+            } // } #60 (L4) - fun parseReportField
 
-            // Detect whether Reports uses 'cr' or 'id'
-            val reportCols = mutableSetOf<String>()
-            conn.createStatement().use { stmt -> // { #63 (L4) - stmt.use
-                stmt.executeQuery("PRAGMA table_info(Reports)").use { rs -> // { #64 (L5) - rs.use
-                    while (rs.next()) reportCols.add(rs.getString("name").trim().lowercase())
-                } // } #64 (L5) - rs.use
-            } // } #63 (L4) - stmt.use
-            val keyCol = if ("cr" in reportCols) "cr" else "id"
-
-            conn.createStatement().use { stmt -> // { #65 (L4) - stmt.use
-                stmt.executeQuery("SELECT f, g FROM Reports WHERE TRIM($keyCol) = '1'").use { rs -> // { #66 (L5) - rs.use
-                    while (rs.next()) { // { #67 (L6) - while rs.next
+            conn.createStatement().use { stmt -> // { #73 (L5) - stmt.use
+                stmt.executeQuery("SELECT f, g FROM reports WHERE id = '1' LIMIT 1").use { rs -> // { #74 (L6) - rs.use
+                    if (rs.next()) { // { #75 (L7) - if rs.next
                         val rawF = rs.getString("f")?.trim().orEmpty()
-                        if (rawF.isNotBlank()) { // { #68 (L7) - if rawF.isNotBlank
-                            runCatching { extractStaffFromJsonElement(Json.parseToJsonElement(rawF), "Branch") }
-                        } // } #68 (L7) - if rawF.isNotBlank
+                        if (rawF.isNotBlank()) { // { #76 (L8) - if rawF.isNotBlank
+                            runCatching { parseReportField(Json.parseToJsonElement(rawF), "Branch") }
+                        } // } #76 (L8) - if rawF.isNotBlank
 
                         val rawG = rs.getString("g")?.trim().orEmpty()
-                        if (rawG.isNotBlank()) { // { #69 (L7) - if rawG.isNotBlank
-                            runCatching { extractStaffFromJsonElement(Json.parseToJsonElement(rawG), "Head Office") }
-                        } // } #69 (L7) - if rawG.isNotBlank
-                    } // } #67 (L6) - while rs.next
-                } // } #66 (L5) - rs.use
-            } // } #65 (L4) - stmt.use
+                        if (rawG.isNotBlank()) { // { #77 (L8) - if rawG.isNotBlank
+                            runCatching { parseReportField(Json.parseToJsonElement(rawG), "Head Office") }
+                        } // } #77 (L8) - if rawG.isNotBlank
+                    } // } #75 (L7) - if rs.next
+                } // } #74 (L6) - rs.use
+            } // } #73 (L5) - stmt.use
+
+            // Lookup MasterData for all ADKR codes extracted from 1f and 1g
+            val orderedCodes = (branchCodes + hoCodes).distinct()
+            val hoCodeSet = hoCodes.toSet()
+            val masterByCode = mutableMapOf<String, AttendanceRow>()
+
+            if (orderedCodes.isNotEmpty()) { // { #78 (L4) - if orderedCodes.isNotEmpty
+                val placeholders = orderedCodes.joinToString(",") { "?" }
+                val sql = """
+                    SELECT * FROM MasterData
+                    WHERE UPPER(TRIM(Code_2)) IN ($placeholders)
+                """.trimIndent()
+
+                conn.prepareStatement(sql).use { ps -> // { #79 (L5) - ps.use
+                    orderedCodes.forEachIndexed { idx, code -> ps.setString(idx + 1, code) }
+                    ps.executeQuery().use { rs -> // { #80 (L6) - rs.use
+                        val meta = rs.metaData
+                        val colMap = (1..meta.columnCount).associate {
+                            meta.getColumnName(it).trim().lowercase() to it
+                        }
+                        fun col(vararg keys: String): String { // { #81 (L7) - fun col
+                            for (k in keys) { // { #82 (L8) - for keys
+                                val i = colMap[k.lowercase()]
+                                if (i != null) { // { #83 (L9) - if i != null
+                                    val v = rs.getString(i)?.trim().orEmpty()
+                                    if (v.isNotBlank()) return v
+                                } // } #83 (L9) - if i != null
+                            } // } #82 (L8) - for keys
+                            return ""
+                        } // } #81 (L7) - fun col
+
+                        while (rs.next()) { // { #84 (L7) - while rs.next
+                            val code = col("Code_2", "a3", "code").uppercase()
+                            if (code.isNotBlank()) { // { #85 (L8) - if code.isNotBlank
+                                val isHo = code in hoCodeSet
+                                val dept = col("department_8", "a9", "department")
+                                    .ifBlank { if (isHo) "Head Office" else "Operation" }
+                                val br = col("branch_name_9", "a10", "branch")
+                                    .ifBlank { if (isHo) "Head Office" else "Branch" }
+                                masterByCode[code] = AttendanceRow(
+                                    code = code,
+                                    name = col("employee_name_3", "a4", "name"),
+                                    designation = col("designation_7", "a8", "designation"),
+                                    department = dept,
+                                    branch = br,
+                                    portfolio = col("a52", "portfolio_7", "portfolio"),
+                                    doj = col("doj_in_adhikar_10", "a11", "doj")
+                                )
+                            } // } #85 (L8) - if code.isNotBlank
+                        } // } #84 (L7) - while rs.next
+                    } // } #80 (L6) - rs.use
+                } // } #79 (L5) - ps.use
+            } // } #78 (L4) - if orderedCodes.isNotEmpty
             conn.close()
 
-            fun JsonObject.getField(vararg keys: String): String { // { #70 (L3) - fun getField
-                for (k in keys) { // { #71 (L4) - for keys
-                    val matchKey = this.keys.firstOrNull { it.equals(k, ignoreCase = true) }
-                    if (matchKey != null) { // { #72 (L5) - if matchKey != null
-                        val v = this[matchKey]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                        if (v.isNotBlank()) return v
-                    } // } #72 (L5) - if matchKey != null
-                } // } #71 (L4) - for keys
-                return ""
-            } // } #70 (L3) - fun getField
+            val finalRows = if (orderedCodes.isNotEmpty()) { // { #86 (L4) - if orderedCodes.isNotEmpty
+                orderedCodes.mapNotNull { masterByCode[it] }
+            } else { // } #86 (L4) - if orderedCodes.isNotEmpty / { #87 (L4) - else
+                directRows
+            } // } #87 (L4) - else
 
-            // Step 3: Build CSV with exact required headers and a1..a67 mappings
+            // Step 3: Build CSV with exact required headers
             val headers = listOf(
                 "SL.NO", "Code", "Name", "Designation", "Department", "Branch", "PORTFOLIO", "DOJ",
                 "Present Days", "Weekly Offs", "Declared Holidays",
@@ -416,28 +512,16 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
             val csvBuilder = StringBuilder()
             csvBuilder.appendLine(headers.joinToString(",") { escapeCsvVal(it) })
 
-            staffEntries.forEachIndexed { idx, entry -> // { #73 (L3) - forEachIndexed
-                val obj = entry.obj
-                val slNo = (idx + 1).toString()
-                val code = obj.getField("a3", "Code", "empCode", "Code_2")
-                val name = obj.getField("a4", "Name", "empName", "employee_name_3")
-                val designation = obj.getField("a8", "Designation", "designation_7")
-                val department = obj.getField("a9", "Department", "department_8")
-                    .ifBlank { if (entry.unitType == "Head Office") entry.groupName else "Operation" }
-                val branch = obj.getField("a10", "Branch", "branchName", "branch_name_9")
-                    .ifBlank { entry.groupName.ifBlank { entry.unitType } }
-                val portfolio = obj.getField("a52", "PORTFOLIO", "Portfolio", "portfolio_7")
-                val doj = obj.getField("a11", "DOJ", "dojInAdhikar", "doj_in_adhikar_10")
-
+            finalRows.forEachIndexed { idx, emp -> // { #88 (L4) - forEachIndexed
                 val row = listOf(
-                    slNo,
-                    code,
-                    name,
-                    designation,
-                    department,
-                    branch,
-                    portfolio,
-                    doj,
+                    (idx + 1).toString(),
+                    emp.code,
+                    emp.name,
+                    emp.designation,
+                    emp.department,
+                    emp.branch,
+                    emp.portfolio,
+                    emp.doj,
                     presentDays.toString(),
                     sunday.toString(),
                     holiday.toString(),
@@ -454,9 +538,9 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
                     ""  // Prepare By
                 )
                 csvBuilder.appendLine(row.joinToString(",") { escapeCsvVal(it) })
-            } // } #73 (L3) - forEachIndexed
+            } // } #88 (L4) - forEachIndexed
 
-            val fileName = "Attendance_${targetMonthc.uppercase()}.csv"
+            val fileName = "Attendance_${resolvedMonthc.uppercase()}.csv"
             call.response.header(
                 HttpHeaders.ContentDisposition,
                 ContentDisposition.Attachment.withParameter(
@@ -465,74 +549,76 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
                 ).toString()
             )
             call.respondText(csvBuilder.toString(), ContentType.Text.CSV)
-        } catch (e: Exception) { // } #48 (L3) - try / { #74 (L3) - catch Exception
+        } catch (e: Exception) { // } #47 (L3) - try / { #89 (L3) - catch Exception
             try { conn.close() } catch (_: Exception) {}
             call.respond(
                 HttpStatusCode.InternalServerError,
                 mapOf("error" to (e.localizedMessage ?: "Failed to generate attendance CSV"))
             )
-        } // } #74 (L3) - catch Exception
-    } // } #45 (L2) - get /api/turso/download-attendance-csv
+        } // } #89 (L3) - catch Exception
+    } // } #45 (L2) - fun handleDownloadAttendanceCsv
+
+    get("/api/turso/download-attendance-csv") { handleDownloadAttendanceCsv() }
+    get("/api/turso/download-attendance-csv/{monthc}") { handleDownloadAttendanceCsv() }
 
     // =========================================================================
     // 5. GET /api/turso/checknewstaffaccount (1e Staff Bank Account Check CSV)
     // =========================================================================
-    get("/api/turso/checknewstaffaccount") { // { #75 (L2) - get /api/turso/checknewstaffaccount
+    get("/api/turso/checknewstaffaccount") { // { #90 (L2) - get /api/turso/checknewstaffaccount
         val conn = TursoDatabaseService.getConnection()
-        if (conn == null) { // { #76 (L3) - if conn == null
+        if (conn == null) { // { #91 (L3) - if conn == null
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
             return@get
-        } // } #76 (L3) - if conn == null
+        } // } #91 (L3) - if conn == null
 
-        try { // { #77 (L3) - try
-            // Step 1: Read 1e staff list from Reports (cr = '1', field 'e')
+        try { // { #92 (L3) - try
+            // Step 1: Read 1e staff list from reports (id = '1', field 'e')
             val codesFrom1e = mutableListOf<String>()
             val fallbackObjByCode = mutableMapOf<String, JsonObject>()
 
-            conn.createStatement().use { stmt -> // { #78 (L4) - stmt.use
-                stmt.executeQuery("SELECT cr, e FROM Reports WHERE TRIM(cr) = '1'").use { rs -> // { #79 (L5) - rs.use
-                    while (rs.next()) { // { #80 (L6) - while rs.next
+            conn.createStatement().use { stmt -> // { #93 (L4) - stmt.use
+                stmt.executeQuery("SELECT e FROM reports WHERE id = '1' LIMIT 1").use { rs -> // { #94 (L5) - rs.use
+                    while (rs.next()) { // { #95 (L6) - while rs.next
                         val rawE = rs.getString("e")?.trim().orEmpty()
-                        if (rawE.startsWith("[")) { // { #81 (L7) - if rawE.startsWith
-                            runCatching { // { #82 (L8) - runCatching
-                                Json.parseToJsonElement(rawE).jsonArray.forEach { el -> // { #83 (L9) - forEach
-                                    if (el is JsonObject) { // { #84 (L10) - if el is JsonObject
+                        if (rawE.startsWith("[")) { // { #96 (L7) - if rawE.startsWith
+                            runCatching { // { #97 (L8) - runCatching
+                                Json.parseToJsonElement(rawE).jsonArray.forEach { el -> // { #98 (L9) - forEach
+                                    if (el is JsonObject) { // { #99 (L10) - if el is JsonObject
                                         val codeKey = el.keys.firstOrNull {
-                                            it.equals("Code", true) || it.equals("empCode", true) || it.equals("a1", true)
+                                            it.equals("Code", true) || it.equals("empCode", true) || it.equals("a3", true) || it.equals("Code_2", true)
                                         }
                                         val codeVal = codeKey?.let { el[it]?.jsonPrimitive?.contentOrNull?.trim()?.uppercase() }.orEmpty()
-                                        if (codeVal.isNotBlank()) { // { #85 (L11) - if codeVal.isNotBlank
+                                        if (codeVal.isNotBlank()) { // { #100 (L11) - if codeVal.isNotBlank
                                             codesFrom1e.add(codeVal)
                                             fallbackObjByCode[codeVal] = el
-                                        } // } #85 (L11) - if codeVal.isNotBlank
-                                    } else if (el is JsonPrimitive) { // } #84 (L10) - if el is JsonObject / { #86 (L10) - else if
+                                        } // } #100 (L11) - if codeVal.isNotBlank
+                                    } else if (el is JsonPrimitive) { // } #99 (L10) - if el is JsonObject / { #101 (L10) - else if
                                         val codeVal = el.content.trim().uppercase()
                                         if (codeVal.isNotBlank()) codesFrom1e.add(codeVal)
-                                    } // } #86 (L10) - else if
-                                } // } #83 (L9) - forEach
-                            } // } #82 (L8) - runCatching
-                        } else if (rawE.startsWith("{")) { // } #81 (L7) - if rawE.startsWith / { #87 (L7) - else if
-                            runCatching { // { #88 (L8) - runCatching
+                                    } // } #101 (L10) - else if
+                                } // } #98 (L9) - forEach
+                            } // } #97 (L8) - runCatching
+                        } else if (rawE.startsWith("{")) { // } #96 (L7) - if rawE.startsWith / { #102 (L7) - else if
+                            runCatching { // { #103 (L8) - runCatching
                                 val el = Json.parseToJsonElement(rawE).jsonObject
                                 val codeKey = el.keys.firstOrNull {
-                                    it.equals("Code", true) || it.equals("empCode", true) || it.equals("a1", true)
+                                    it.equals("Code", true) || it.equals("empCode", true) || it.equals("a3", true) || it.equals("Code_2", true)
                                 }
                                 val codeVal = codeKey?.let { el[it]?.jsonPrimitive?.contentOrNull?.trim()?.uppercase() }.orEmpty()
-                                if (codeVal.isNotBlank()) { // { #89 (L9) - if codeVal.isNotBlank
+                                if (codeVal.isNotBlank()) { // { #104 (L9) - if codeVal.isNotBlank
                                     codesFrom1e.add(codeVal)
                                     fallbackObjByCode[codeVal] = el
-                                } // } #89 (L9) - if codeVal.isNotBlank
-                            } // } #88 (L8) - runCatching
-                        } else if (rawE.isNotBlank()) { // } #87 (L7) - else if / { #90 (L7) - else if
-                            // Supports comma/newline/tilde-separated codes in Reports.e as well
+                                } // } #104 (L9) - if codeVal.isNotBlank
+                            } // } #103 (L8) - runCatching
+                        } else if (rawE.isNotBlank()) { // } #102 (L7) - else if / { #105 (L7) - else if
                             rawE.split(',', '\n', '~', ';').forEach { token ->
                                 val codeVal = token.trim().uppercase()
                                 if (codeVal.isNotBlank()) codesFrom1e.add(codeVal)
                             }
-                        } // } #90 (L7) - else if
-                    } // } #80 (L6) - while rs.next
-                } // } #79 (L5) - rs.use
-            } // } #78 (L4) - stmt.use
+                        } // } #105 (L7) - else if
+                    } // } #95 (L6) - while rs.next
+                } // } #94 (L5) - rs.use
+            } // } #93 (L4) - stmt.use
 
             // Step 2: Fetch Bank, Account No & IFSC from MasterData (auto-detecting code column)
             data class AccountRow(
@@ -548,87 +634,87 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
             val masterMap = mutableMapOf<String, AccountRow>()
             val distinctCodes = codesFrom1e.distinct()
 
-            if (distinctCodes.isNotEmpty()) { // { #91 (L3) - if distinctCodes.isNotEmpty
+            if (distinctCodes.isNotEmpty()) { // { #106 (L3) - if distinctCodes.isNotEmpty
                 val availableCols = mutableListOf<String>()
-                conn.createStatement().use { stmt -> // { #92 (L4) - stmt.use
-                    stmt.executeQuery("PRAGMA table_info(MasterData)").use { rs -> // { #93 (L5) - rs.use
-                        while (rs.next()) { // { #94 (L6) - while rs.next
+                conn.createStatement().use { stmt -> // { #107 (L4) - stmt.use
+                    stmt.executeQuery("PRAGMA table_info(MasterData)").use { rs -> // { #108 (L5) - rs.use
+                        while (rs.next()) { // { #109 (L6) - while rs.next
                             availableCols.add(rs.getString("name").trim())
-                        } // } #94 (L6) - while rs.next
-                    } // } #93 (L5) - rs.use
-                } // } #92 (L4) - stmt.use
+                        } // } #109 (L6) - while rs.next
+                    } // } #108 (L5) - rs.use
+                } // } #107 (L4) - stmt.use
 
                 val codeColName = availableCols.firstOrNull { col ->
-                    col.equals("a1", true) ||
+                    col.equals("code_2", true) ||
+                    col.equals("a3", true) ||
                     col.equals("code", true) ||
                     col.equals("empcode", true) ||
                     col.equals("emp_code", true) ||
                     col.equals("empid", true) ||
-                    col.equals("emp_id", true) ||
-                    col.equals("id", true)
+                    col.equals("emp_id", true)
                 }
 
-                if (codeColName != null) { // { #95 (L4) - if codeColName != null
+                if (codeColName != null) { // { #110 (L4) - if codeColName != null
                     val placeholders = distinctCodes.joinToString(",") { "?" }
                     val sql = """SELECT * FROM MasterData WHERE UPPER(TRIM("$codeColName")) IN ($placeholders)"""
-                    conn.prepareStatement(sql).use { ps -> // { #96 (L5) - ps.use
+                    conn.prepareStatement(sql).use { ps -> // { #111 (L5) - ps.use
                         distinctCodes.forEachIndexed { idx, code -> ps.setString(idx + 1, code) }
-                        ps.executeQuery().use { rs -> // { #97 (L6) - rs.use
+                        ps.executeQuery().use { rs -> // { #112 (L6) - rs.use
                             val meta = rs.metaData
                             val colMap = (1..meta.columnCount).associate {
                                 meta.getColumnName(it).trim().lowercase() to it
                             }
-                            fun col(vararg keys: String): String { // { #98 (L7) - fun col
-                                for (k in keys) { // { #99 (L8) - for keys
+                            fun col(vararg keys: String): String { // { #113 (L7) - fun col
+                                for (k in keys) { // { #114 (L8) - for keys
                                     val i = colMap[k.lowercase()]
-                                    if (i != null) { // { #100 (L9) - if i != null
+                                    if (i != null) { // { #115 (L9) - if i != null
                                         val v = rs.getString(i)?.trim().orEmpty()
                                         if (v.isNotBlank()) return v
-                                    } // } #100 (L9) - if i != null
-                                } // } #99 (L8) - for keys
+                                    } // } #115 (L9) - if i != null
+                                } // } #114 (L8) - for keys
                                 return ""
-                            } // } #98 (L7) - fun col
+                            } // } #113 (L7) - fun col
 
-                            while (rs.next()) { // { #101 (L7) - while rs.next
-                                val code = col(codeColName, "a1", "code", "empcode", "emp_code", "empid", "emp_id").uppercase()
-                                if (code.isNotBlank()) { // { #102 (L8) - if code.isNotBlank
+                            while (rs.next()) { // { #116 (L7) - while rs.next
+                                val code = col(codeColName, "code_2", "a3", "code").uppercase()
+                                if (code.isNotBlank()) { // { #117 (L8) - if code.isNotBlank
                                     masterMap[code] = AccountRow(
                                         code = code,
-                                        name = col("a4", "name", "empname", "emp_name", "employee_name"),
-                                        designation = col("a8", "designation", "desig"),
-                                        branch = col("a10", "branch", "branchname", "branch_name"),
-                                        bank = col("a20", "bankname", "bank_name", "bank"),
-                                        accountNo = col("a21", "bankaccountnumber", "bank_account_number", "accountno", "account_no", "acno"),
-                                        ifscCode = col("a22", "ifsccodebankbranchname", "ifsccode", "ifsc_code", "ifsc")
+                                        name = col("employee_name_3", "a4", "name", "empname", "emp_name"),
+                                        designation = col("designation_7", "a8", "designation", "desig"),
+                                        branch = col("branch_name_9", "a10", "branch", "branchname", "branch_name"),
+                                        bank = col("bank_name_19", "a20", "bankname", "bank_name", "bank"),
+                                        accountNo = col("bank_account_number_20", "a21", "bankaccountnumber", "accountno", "account_no"),
+                                        ifscCode = col("ifsc_code_bank_branch_name_21", "a22", "ifsccode", "ifsc_code", "ifsc")
                                     )
-                                } // } #102 (L8) - if code.isNotBlank
-                            } // } #101 (L7) - while rs.next
-                        } // } #97 (L6) - rs.use
-                    } // } #96 (L5) - ps.use
-                } // } #95 (L4) - if codeColName != null
-            } // } #91 (L3) - if distinctCodes.isNotEmpty
+                                } // } #117 (L8) - if code.isNotBlank
+                            } // } #116 (L7) - while rs.next
+                        } // } #112 (L6) - rs.use
+                    } // } #111 (L5) - ps.use
+                } // } #110 (L4) - if codeColName != null
+            } // } #106 (L3) - if distinctCodes.isNotEmpty
             conn.close()
 
             // Step 3: Build CSV: slno,code,name,designation,branch,bank,accountno,ifsccode
             val csvBuilder = StringBuilder()
             csvBuilder.appendLine("slno,code,name,designation,branch,bank,accountno,ifsccode")
 
-            distinctCodes.forEachIndexed { idx, code -> // { #103 (L3) - forEachIndexed
+            distinctCodes.forEachIndexed { idx, code -> // { #118 (L3) - forEachIndexed
                 val slno = (idx + 1).toString()
                 val m = masterMap[code]
                 val fb = fallbackObjByCode[code]
 
-                fun fbVal(vararg keys: String): String { // { #104 (L4) - fun fbVal
+                fun fbVal(vararg keys: String): String { // { #119 (L4) - fun fbVal
                     if (fb == null) return ""
-                    for (k in keys) { // { #105 (L5) - for keys
+                    for (k in keys) { // { #120 (L5) - for keys
                         val mk = fb.keys.firstOrNull { it.equals(k, true) }
-                        if (mk != null) { // { #106 (L6) - if mk != null
+                        if (mk != null) { // { #121 (L6) - if mk != null
                             val v = fb[mk]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
                             if (v.isNotBlank()) return v
-                        } // } #106 (L6) - if mk != null
-                    } // } #105 (L5) - for keys
+                        } // } #121 (L6) - if mk != null
+                    } // } #120 (L5) - for keys
                     return ""
-                } // } #104 (L4) - fun fbVal
+                } // } #119 (L4) - fun fbVal
 
                 val name = m?.name?.ifBlank { fbVal("Name", "empName", "a4") } ?: fbVal("Name", "empName", "a4")
                 val designation = m?.designation?.ifBlank { fbVal("Designation", "a8") } ?: fbVal("Designation", "a8")
@@ -639,7 +725,7 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
 
                 val row = listOf(slno, code, name, designation, branch, bank, accountNo, ifscCode)
                 csvBuilder.appendLine(row.joinToString(",") { escapeCsvVal(it) })
-            } // } #103 (L3) - forEachIndexed
+            } // } #118 (L3) - forEachIndexed
 
             call.response.header(
                 HttpHeaders.ContentDisposition,
@@ -649,17 +735,17 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
                 ).toString()
             )
             call.respondText(csvBuilder.toString(), ContentType.Text.CSV)
-        } catch (e: Exception) { // } #77 (L3) - try / { #107 (L3) - catch Exception
+        } catch (e: Exception) { // } #92 (L3) - try / { #122 (L3) - catch Exception
             try { conn.close() } catch (_: Exception) {}
             call.respond(
                 HttpStatusCode.InternalServerError,
                 mapOf("error" to (e.localizedMessage ?: "Failed to generate account check CSV"))
             )
-        } // } #107 (L3) - catch Exception
-    } // } #75 (L2) - get /api/turso/checknewstaffaccount
+        } // } #122 (L3) - catch Exception
+    } // } #90 (L2) - get /api/turso/checknewstaffaccount
 } // } #1 (L1) - fun Route.configureSalaryRoutes
 
-private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> { // { #108 (L1) - fun fetchSalariesDirectHttp
+private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> { // { #123 (L1) - fun fetchSalariesDirectHttp
     if (ids.isEmpty()) return emptyList()
 
     val rawUrl = System.getenv("TURSO_DATABASE_URL")?.trim().orEmpty()
@@ -679,32 +765,32 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> { // { #
     val placeholders = ids.joinToString(",") { "?" }
     val sql = "SELECT * FROM SalaryHistory WHERE id IN ($placeholders)"
 
-    val argsJson = buildJsonArray { // { #109 (L2) - buildJsonArray
-        ids.forEach { id -> // { #110 (L3) - forEach
-            addJsonObject { // { #111 (L4) - addJsonObject
+    val argsJson = buildJsonArray { // { #124 (L2) - buildJsonArray
+        ids.forEach { id -> // { #125 (L3) - forEach
+            addJsonObject { // { #126 (L4) - addJsonObject
                 put("type", "text")
                 put("value", id.trim())
-            } // } #111 (L4) - addJsonObject
-        } // } #110 (L3) - forEach
-    } // } #109 (L2) - buildJsonArray
+            } // } #126 (L4) - addJsonObject
+        } // } #125 (L3) - forEach
+    } // } #124 (L2) - buildJsonArray
 
-    val requestBody = buildJsonObject { // { #112 (L2) - buildJsonObject
-        putJsonArray("requests") { // { #113 (L3) - putJsonArray
-            addJsonObject { // { #114 (L4) - addJsonObject
+    val requestBody = buildJsonObject { // { #127 (L2) - buildJsonObject
+        putJsonArray("requests") { // { #128 (L3) - putJsonArray
+            addJsonObject { // { #129 (L4) - addJsonObject
                 put("type", "execute")
-                putJsonObject("stmt") { // { #115 (L5) - putJsonObject
+                putJsonObject("stmt") { // { #130 (L5) - putJsonObject
                     put("sql", sql)
                     put("args", argsJson)
-                } // } #115 (L5) - putJsonObject
-            } // } #114 (L4) - addJsonObject
-            addJsonObject { // { #116 (L4) - addJsonObject
+                } // } #130 (L5) - putJsonObject
+            } // } #129 (L4) - addJsonObject
+            addJsonObject { // { #131 (L4) - addJsonObject
                 put("type", "close")
-            } // } #116 (L4) - addJsonObject
-        } // } #113 (L3) - putJsonArray
+            } // } #131 (L4) - addJsonObject
+        } // } #128 (L3) - putJsonArray
     }.toString()
 
     val url = java.net.URI(tursoUrl).toURL()
-    val conn = (url.openConnection() as HttpURLConnection).apply { // { #117 (L2) - apply
+    val conn = (url.openConnection() as HttpURLConnection).apply { // { #132 (L2) - apply
         requestMethod = "POST"
         connectTimeout = 15000
         readTimeout = 15000
@@ -712,7 +798,7 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> { // { #
         setRequestProperty("Authorization", "Bearer $authToken")
         doOutput = true
         outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
-    } // } #117 (L2) - apply
+    } // } #132 (L2) - apply
 
     val responseText = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
     val root = Json.parseToJsonElement(responseText).jsonObject
@@ -725,14 +811,14 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> { // { #
 
     val dtoList = mutableListOf<SalaryDto>()
 
-    for (rowElement in rows) { // { #118 (L2) - for rowElement in rows
+    for (rowElement in rows) { // { #133 (L2) - for rowElement in rows
         val rowArr = rowElement.jsonArray
         val map = mutableMapOf<String, String>()
-        for (i in cols.indices) { // { #119 (L3) - for i in cols.indices
+        for (i in cols.indices) { // { #134 (L3) - for i in cols.indices
             val cellObj = rowArr[i].jsonObject
             val value = cellObj["value"]?.jsonPrimitive?.contentOrNull ?: ""
             map[cols[i].lowercase()] = value
-        } // } #119 (L3) - for i in cols.indices
+        } // } #134 (L3) - for i in cols.indices
 
         dtoList.add(
             SalaryDto(
@@ -775,17 +861,17 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> { // { #
                 backSalaryGive = map["backsalarygive"] ?: ""
             )
         )
-    } // } #118 (L2) - for rowElement in rows
+    } // } #133 (L2) - for rowElement in rows
 
     val byId = dtoList.associateBy { it.id }
     return ids.mapNotNull { byId[it] }
-} // } #108 (L1) - fun fetchSalariesDirectHttp
+} // } #123 (L1) - fun fetchSalariesDirectHttp
 
-private fun escapeCsvVal(value: String): String { // { #120 (L1) - fun escapeCsvVal
+private fun escapeCsvVal(value: String): String { // { #135 (L1) - fun escapeCsvVal
     val clean = value.trim()
-    return if (clean.contains(",") || clean.contains("\"") || clean.contains("\n") || clean.contains("\r")) { // { #121 (L2) - if clean.contains
+    return if (clean.contains(",") || clean.contains("\"") || clean.contains("\n") || clean.contains("\r")) { // { #136 (L2) - if clean.contains
         "\"${clean.replace("\"", "\"\"")}\""
-    } else { // } #121 (L2) - if clean.contains / { #122 (L2) - else
+    } else { // } #136 (L2) - if clean.contains / { #137 (L2) - else
         clean
-    } // } #122 (L2) - else
-} // } #120 (L1) - fun escapeCsvVal
+    } // } #137 (L2) - else
+} // } #135 (L1) - fun escapeCsvVal
