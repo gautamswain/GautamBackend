@@ -275,6 +275,306 @@ fun Route.configureSalaryRoutes() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to save salary info")))
         }
     }
+
+    // =========================================================================
+    // 4. GET /api/turso/download-attendance-csv?monthc=M116
+    // =========================================================================
+    get("/api/turso/download-attendance-csv") {
+        val targetMonthc = call.request.queryParameters["monthc"]?.trim().orEmpty()
+        if (targetMonthc.isBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                mapOf("error" to "Please provide monthc parameter (e.g. ?monthc=M116)")
+            )
+            return@get
+        }
+
+        val conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@get
+        }
+
+        try {
+            // Step 1: Fetch totday, sunday, holiday from salaryinfo matching monthc (e.g. M116)
+            var totday = 0
+            var sunday = 0
+            var holiday = 0
+            var foundSal = false
+
+            val salSql = "SELECT totday, sunday, holiday FROM salaryinfo WHERE LOWER(TRIM(monthc)) = LOWER(TRIM(?)) LIMIT 1"
+            conn.prepareStatement(salSql).use { ps ->
+                ps.setString(1, targetMonthc)
+                ps.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        foundSal = true
+                        totday = rs.getString("totday")?.trim()?.toIntOrNull() ?: 0
+                        sunday = rs.getString("sunday")?.trim()?.toIntOrNull() ?: 0
+                        holiday = rs.getString("holiday")?.trim()?.toIntOrNull() ?: 0
+                    }
+                }
+            }
+
+            if (!foundSal) {
+                conn.close()
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    mapOf("error" to "No salaryinfo record found for monthc = $targetMonthc")
+                )
+                return@get
+            }
+
+            val presentDays = maxOf(0, totday - sunday - holiday)
+            val casualLeave = 0
+            val sickLeave = 0
+            val earnedLeave = 0
+            val marriageLeave = 0
+            val maternityLeave = 0
+            val paternityLeave = 0
+            val lossOfPay = 0
+            val totalPaidDays = (presentDays + sunday + holiday +
+                casualLeave + sickLeave + earnedLeave + marriageLeave + maternityLeave + paternityLeave) - lossOfPay
+
+            // Step 2: Fetch JSON arrays from Reports table (columns 'f' for 1f and 'g' for 1g)
+            val staffObjects = mutableListOf<JsonObject>()
+            conn.createStatement().use { stmt ->
+                stmt.executeQuery("SELECT f, g FROM Reports LIMIT 1").use { rs ->
+                    if (rs.next()) {
+                        listOf("f", "g").forEach { colName ->
+                            val rawJson = rs.getString(colName)?.trim().orEmpty()
+                            if (rawJson.startsWith("[")) {
+                                runCatching {
+                                    Json.parseToJsonElement(rawJson).jsonArray.forEach { el ->
+                                        if (el is JsonObject) staffObjects.add(el)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            conn.close()
+
+            // Helper to safely extract field across possible JSON key variations
+            fun JsonObject.getField(vararg keys: String): String {
+                for (k in keys) {
+                    val matchKey = this.keys.firstOrNull { it.equals(k, ignoreCase = true) }
+                    if (matchKey != null) {
+                        val v = this[matchKey]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (v.isNotBlank()) return v
+                    }
+                }
+                return ""
+            }
+
+            // Step 3: Build CSV with exact required headers
+            val headers = listOf(
+                "SL.NO", "Code", "Name", "Designation", "Department", "Branch", "PORTFOLIO", "DOJ",
+                "Present Days", "Weekly Offs", "Declared Holidays",
+                "Casual Leave", "Sick Leave", "Earned Leave", "Marriage Leave", "Maternity Leave", "Paternity Leave",
+                "Loss of Pay", "Total Paid Days", "Status", "REMARKS", "Prepare By"
+            )
+
+            val csvBuilder = StringBuilder()
+            csvBuilder.appendLine(headers.joinToString(",") { escapeCsvVal(it) })
+
+            staffObjects.forEachIndexed { idx, obj ->
+                val slNo = (idx + 1).toString()
+                val code = obj.getField("Code", "empCode", "emp_id_2", "a1")
+                val name = obj.getField("Name", "empName", "employee_name_3", "a4")
+                val designation = obj.getField("Designation", "designation_7", "a8")
+                val department = obj.getField("Department", "department_8", "a9")
+                val branch = obj.getField("Branch", "branchName", "branch_name_9", "a10")
+                val portfolio = obj.getField("PORTFOLIO", "Portfolio", "portfolio_7", "a11")
+                val doj = obj.getField("DOJ", "dojInAdhikar", "a6")
+
+                val row = listOf(
+                    slNo,
+                    code,
+                    name,
+                    designation,
+                    department,
+                    branch,
+                    portfolio,
+                    doj,
+                    presentDays.toString(),
+                    sunday.toString(),
+                    holiday.toString(),
+                    casualLeave.toString(),
+                    sickLeave.toString(),
+                    earnedLeave.toString(),
+                    marriageLeave.toString(),
+                    maternityLeave.toString(),
+                    paternityLeave.toString(),
+                    lossOfPay.toString(),
+                    totalPaidDays.toString(),
+                    "", // Status
+                    "", // REMARKS
+                    ""  // Prepare By
+                )
+                csvBuilder.appendLine(row.joinToString(",") { escapeCsvVal(it) })
+            }
+
+            val fileName = "Attendance_${targetMonthc.uppercase()}.csv"
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(
+                    ContentDisposition.Parameters.FileName,
+                    fileName
+                ).toString()
+            )
+            call.respondText(csvBuilder.toString(), ContentType.Text.CSV)
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf("error" to (e.localizedMessage ?: "Failed to generate attendance CSV"))
+            )
+        }
+    }
+
+    // =========================================================================
+    // 5. GET /api/turso/checknewstaffaccount (1e Staff Bank Account Check CSV)
+    // =========================================================================
+    get("/api/turso/checknewstaffaccount") {
+        val conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@get
+        }
+
+        try {
+            // Step 1: Read 1e staff list from Reports column 'e'
+            val codesFrom1e = mutableListOf<String>()
+            val fallbackObjByCode = mutableMapOf<String, JsonObject>()
+
+            conn.createStatement().use { stmt ->
+                stmt.executeQuery("SELECT e FROM Reports LIMIT 1").use { rs ->
+                    if (rs.next()) {
+                        val rawE = rs.getString("e")?.trim().orEmpty()
+                        if (rawE.startsWith("[")) {
+                            runCatching {
+                                Json.parseToJsonElement(rawE).jsonArray.forEach { el ->
+                                    if (el is JsonObject) {
+                                        val codeKey = el.keys.firstOrNull {
+                                            it.equals("Code", true) || it.equals("empCode", true) || it.equals("a1", true)
+                                        }
+                                        val codeVal = codeKey?.let { el[it]?.jsonPrimitive?.contentOrNull?.trim()?.uppercase() }.orEmpty()
+                                        if (codeVal.isNotBlank()) {
+                                            codesFrom1e.add(codeVal)
+                                            fallbackObjByCode[codeVal] = el
+                                        }
+                                    } else if (el is JsonPrimitive) {
+                                        val codeVal = el.content.trim().uppercase()
+                                        if (codeVal.isNotBlank()) codesFrom1e.add(codeVal)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Step 2: Fetch Bank, Account No & IFSC from MasterData for all 1e codes
+            data class AccountRow(
+                val code: String,
+                val name: String,
+                val designation: String,
+                val branch: String,
+                val bank: String,
+                val accountNo: String,
+                val ifscCode: String
+            )
+
+            val masterMap = mutableMapOf<String, AccountRow>()
+            if (codesFrom1e.isNotEmpty()) {
+                val placeholders = codesFrom1e.joinToString(",") { "?" }
+                val sql = "SELECT * FROM MasterData WHERE UPPER(TRIM(a1)) IN ($placeholders)"
+                conn.prepareStatement(sql).use { ps ->
+                    codesFrom1e.forEachIndexed { idx, code -> ps.setString(idx + 1, code) }
+                    ps.executeQuery().use { rs ->
+                        val meta = rs.metaData
+                        val colMap = (1..meta.columnCount).associate {
+                            meta.getColumnName(it).trim().lowercase() to it
+                        }
+                        fun col(vararg keys: String): String {
+                            for (k in keys) {
+                                val i = colMap[k.lowercase()]
+                                if (i != null) {
+                                    val v = rs.getString(i)?.trim().orEmpty()
+                                    if (v.isNotBlank()) return v
+                                }
+                            }
+                            return ""
+                        }
+
+                        while (rs.next()) {
+                            val code = col("a1", "code", "empCode").uppercase()
+                            if (code.isNotBlank()) {
+                                masterMap[code] = AccountRow(
+                                    code = code,
+                                    name = col("a4", "name", "empName"),
+                                    designation = col("a8", "designation"),
+                                    branch = col("a10", "branch", "branchName"),
+                                    bank = col("a20", "bankName", "bank"),
+                                    accountNo = col("a21", "bankAccountNumber", "accountNo"),
+                                    ifscCode = col("a22", "ifscCodeBankBranchName", "ifscCode", "ifsc")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            conn.close()
+
+            // Step 3: Build CSV: slno,code,name,designation,branch,bank,accountno,ifsccode
+            val csvBuilder = StringBuilder()
+            csvBuilder.appendLine("slno,code,name,designation,branch,bank,accountno,ifsccode")
+
+            codesFrom1e.distinct().forEachIndexed { idx, code ->
+                val slno = (idx + 1).toString()
+                val m = masterMap[code]
+                val fb = fallbackObjByCode[code]
+
+                fun fbVal(vararg keys: String): String {
+                    if (fb == null) return ""
+                    for (k in keys) {
+                        val mk = fb.keys.firstOrNull { it.equals(k, true) }
+                        if (mk != null) {
+                            val v = fb[mk]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                            if (v.isNotBlank()) return v
+                        }
+                    }
+                    return ""
+                }
+
+                val name = m?.name?.ifBlank { fbVal("Name", "empName", "a4") } ?: fbVal("Name", "empName", "a4")
+                val designation = m?.designation?.ifBlank { fbVal("Designation", "a8") } ?: fbVal("Designation", "a8")
+                val branch = m?.branch?.ifBlank { fbVal("Branch", "branchName", "a10") } ?: fbVal("Branch", "branchName", "a10")
+                val bank = m?.bank?.ifBlank { fbVal("Bank", "bankName", "a20") } ?: fbVal("Bank", "bankName", "a20")
+                val accountNo = m?.accountNo?.ifBlank { fbVal("AccountNo", "bankAccountNumber", "a21") } ?: fbVal("AccountNo", "bankAccountNumber", "a21")
+                val ifscCode = m?.ifscCode?.ifBlank { fbVal("IFSC", "ifscCode", "a22") } ?: fbVal("IFSC", "ifscCode", "a22")
+
+                val row = listOf(slno, code, name, designation, branch, bank, accountNo, ifscCode)
+                csvBuilder.appendLine(row.joinToString(",") { escapeCsvVal(it) })
+            }
+
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(
+                    ContentDisposition.Parameters.FileName,
+                    "NewStaffAccountCheck_1e.csv"
+                ).toString()
+            )
+            call.respondText(csvBuilder.toString(), ContentType.Text.CSV)
+        } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf("error" to (e.localizedMessage ?: "Failed to generate account check CSV"))
+            )
+        }
+    }
 }
 
 private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
@@ -397,4 +697,13 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
 
     val byId = dtoList.associateBy { it.id }
     return ids.mapNotNull { byId[it] }
+}
+
+private fun escapeCsvVal(value: String): String {
+    val clean = value.trim()
+    return if (clean.contains(",") || clean.contains("\"") || clean.contains("\n") || clean.contains("\r")) {
+        "\"${clean.replace("\"", "\"\"")}\""
+    } else {
+        clean
+    }
 }
