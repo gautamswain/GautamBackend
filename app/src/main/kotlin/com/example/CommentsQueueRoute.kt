@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import java.net.HttpURLConnection
-import java.net.URL
 import java.sql.Connection
 import java.util.Locale
 
@@ -64,7 +63,7 @@ private fun executeTursoHttpSql(sql: String, args: List<String> = emptyList()): 
         }
     """.trimIndent()
 
-    val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+    val conn = (java.net.URI(endpoint).toURL().openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
         connectTimeout = 15000
         readTimeout = 15000
@@ -381,14 +380,12 @@ fun Route.commentsQueueRoute() {
 
         try {
             var storedJson = ""
-            var wefDate = java.time.LocalDate.now().toString()
 
             val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE id = ?")
             selectPs.setString(1, commentId)
             val rs = selectPs.executeQuery()
             if (rs.next()) {
                 storedJson = rs.getString("jsondetails") ?: ""
-                wefDate = rs.getString("wef") ?: java.time.LocalDate.now().toString()
             }
             rs.close()
             selectPs.close()
@@ -435,23 +432,23 @@ fun Route.commentsQueueRoute() {
             }
             maxSlRs.close()
             maxSlStmt.close()
-            conn.close()
 
             val dojVal = DateUtils.toExcelSerial(wef_or_doj(detailsObj))
+            val designationVal = resolveDesignationFromDb(conn, designation)
+            conn.close()
 
             val insertMasterSql = """
                 INSERT INTO MasterData (
                     sl_no_1, Code_2, employee_name_3, fathers_name_4, gender_5, dob_6, designation_7, department_8, branch_name_9, 
                     doj_in_adhikar_10, present_address_11, permanent_address_12, highest_educational_qualification_13, 
                     personal_contact_number_14, contact_no_2_15, aadhar_card_no_16, pan_card_no_17, bank_name_19, 
-                    bank_account_number_20, ifsc_code_bank_branch_name_21, esi_no_22, epf_uan_no_23, company_experience_51, 
-                    interviewd_by_56, email61_personal_52, emp_status_35, emp_status_temp_36, slary_37
+                    bank_account_number_20, ifsc_code_bank_branch_name_21, esi_no_22, epf_uan_no_23,
+                    company_name_starting_from_current_to_old_26, interviewed_31, email61_personal_52,
+                    emp_status_35, emp_status_temp_36, slary_37
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', '1', '1'
                 )
             """.trimIndent()
-
-            val designationVal = resolveDesignationFromDb(TursoDatabaseService.getConnection() ?: conn, designation)
 
             val masterArgs = listOf(
                 nextSlNo.toString(),
@@ -518,6 +515,7 @@ fun Route.commentsQueueRoute() {
                 )
             )
         } catch (e: Exception) {
+            try { conn.close() } catch (_: Exception) {}
             e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Confirm NewJ failed")))
         }
@@ -570,6 +568,7 @@ fun Route.commentsQueueRoute() {
 
             val dojVal = DateUtils.toExcelSerial(wef_or_doj(detailsObj))
             val designationVal = resolveDesignationFromDb(conn, designation)
+            conn.close()
 
             val args = mutableListOf<String>()
             val setParts = mutableListOf<String>()
