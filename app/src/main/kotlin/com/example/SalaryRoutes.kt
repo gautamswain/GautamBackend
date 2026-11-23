@@ -10,7 +10,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import java.net.HttpURLConnection
-import java.net.URL
 
 private const val MAX_BATCH = 20
 
@@ -335,18 +334,39 @@ fun Route.configureSalaryRoutes() {
             val totalPaidDays = (presentDays + sunday + holiday +
                 casualLeave + sickLeave + earnedLeave + marriageLeave + maternityLeave + paternityLeave) - lossOfPay
 
-            // Step 2: Fetch JSON arrays from Reports table (columns 'f' for 1f and 'g' for 1g)
-            val staffObjects = mutableListOf<JsonObject>()
+            // Step 2: Fetch 1f (Branch) and 1g (Head Office) from Reports (cr = '1', fields 'f' and 'g')
+            data class StaffEntry(val unitType: String, val obj: JsonObject)
+            val staffEntries = mutableListOf<StaffEntry>()
+
             conn.createStatement().use { stmt ->
-                stmt.executeQuery("SELECT f, g FROM Reports LIMIT 1").use { rs ->
-                    if (rs.next()) {
-                        listOf("f", "g").forEach { colName ->
-                            val rawJson = rs.getString(colName)?.trim().orEmpty()
-                            if (rawJson.startsWith("[")) {
-                                runCatching {
-                                    Json.parseToJsonElement(rawJson).jsonArray.forEach { el ->
-                                        if (el is JsonObject) staffObjects.add(el)
-                                    }
+                stmt.executeQuery("SELECT cr, f, g FROM Reports WHERE TRIM(cr) = '1'").use { rs ->
+                    while (rs.next()) {
+                        val rawF = rs.getString("f")?.trim().orEmpty()
+                        if (rawF.startsWith("[")) {
+                            runCatching {
+                                Json.parseToJsonElement(rawF).jsonArray.forEach { el ->
+                                    if (el is JsonObject) staffEntries.add(StaffEntry("Branch", el))
+                                }
+                            }
+                        } else if (rawF.startsWith("{")) {
+                            runCatching {
+                                Json.parseToJsonElement(rawF).jsonObject.let {
+                                    staffEntries.add(StaffEntry("Branch", it))
+                                }
+                            }
+                        }
+
+                        val rawG = rs.getString("g")?.trim().orEmpty()
+                        if (rawG.startsWith("[")) {
+                            runCatching {
+                                Json.parseToJsonElement(rawG).jsonArray.forEach { el ->
+                                    if (el is JsonObject) staffEntries.add(StaffEntry("Head Office", el))
+                                }
+                            }
+                        } else if (rawG.startsWith("{")) {
+                            runCatching {
+                                Json.parseToJsonElement(rawG).jsonObject.let {
+                                    staffEntries.add(StaffEntry("Head Office", it))
                                 }
                             }
                         }
@@ -355,7 +375,6 @@ fun Route.configureSalaryRoutes() {
             }
             conn.close()
 
-            // Helper to safely extract field across possible JSON key variations
             fun JsonObject.getField(vararg keys: String): String {
                 for (k in keys) {
                     val matchKey = this.keys.firstOrNull { it.equals(k, ignoreCase = true) }
@@ -378,13 +397,14 @@ fun Route.configureSalaryRoutes() {
             val csvBuilder = StringBuilder()
             csvBuilder.appendLine(headers.joinToString(",") { escapeCsvVal(it) })
 
-            staffObjects.forEachIndexed { idx, obj ->
+            staffEntries.forEachIndexed { idx, entry ->
+                val obj = entry.obj
                 val slNo = (idx + 1).toString()
                 val code = obj.getField("Code", "empCode", "emp_id_2", "a1")
                 val name = obj.getField("Name", "empName", "employee_name_3", "a4")
                 val designation = obj.getField("Designation", "designation_7", "a8")
                 val department = obj.getField("Department", "department_8", "a9")
-                val branch = obj.getField("Branch", "branchName", "branch_name_9", "a10")
+                val branch = obj.getField("Branch", "branchName", "branch_name_9", "a10").ifBlank { entry.unitType }
                 val portfolio = obj.getField("PORTFOLIO", "Portfolio", "portfolio_7", "a11")
                 val doj = obj.getField("DOJ", "dojInAdhikar", "a6")
 
@@ -444,13 +464,13 @@ fun Route.configureSalaryRoutes() {
         }
 
         try {
-            // Step 1: Read 1e staff list from Reports column 'e'
+            // Step 1: Read 1e staff list from Reports (cr = '1', field 'e')
             val codesFrom1e = mutableListOf<String>()
             val fallbackObjByCode = mutableMapOf<String, JsonObject>()
 
             conn.createStatement().use { stmt ->
-                stmt.executeQuery("SELECT e FROM Reports LIMIT 1").use { rs ->
-                    if (rs.next()) {
+                stmt.executeQuery("SELECT cr, e FROM Reports WHERE TRIM(cr) = '1'").use { rs ->
+                    while (rs.next()) {
                         val rawE = rs.getString("e")?.trim().orEmpty()
                         if (rawE.startsWith("[")) {
                             runCatching {
@@ -470,12 +490,30 @@ fun Route.configureSalaryRoutes() {
                                     }
                                 }
                             }
+                        } else if (rawE.startsWith("{")) {
+                            runCatching {
+                                val el = Json.parseToJsonElement(rawE).jsonObject
+                                val codeKey = el.keys.firstOrNull {
+                                    it.equals("Code", true) || it.equals("empCode", true) || it.equals("a1", true)
+                                }
+                                val codeVal = codeKey?.let { el[it]?.jsonPrimitive?.contentOrNull?.trim()?.uppercase() }.orEmpty()
+                                if (codeVal.isNotBlank()) {
+                                    codesFrom1e.add(codeVal)
+                                    fallbackObjByCode[codeVal] = el
+                                }
+                            }
+                        } else if (rawE.isNotBlank()) {
+                            // Supports comma/newline/tilde-separated codes in Reports.e as well
+                            rawE.split(',', '\n', '~', ';').forEach { token ->
+                                val codeVal = token.trim().uppercase()
+                                if (codeVal.isNotBlank()) codesFrom1e.add(codeVal)
+                            }
                         }
                     }
                 }
             }
 
-            // Step 2: Fetch Bank, Account No & IFSC from MasterData for all 1e codes
+            // Step 2: Fetch Bank, Account No & IFSC from MasterData (auto-detecting code column)
             data class AccountRow(
                 val code: String,
                 val name: String,
@@ -487,39 +525,62 @@ fun Route.configureSalaryRoutes() {
             )
 
             val masterMap = mutableMapOf<String, AccountRow>()
-            if (codesFrom1e.isNotEmpty()) {
-                val placeholders = codesFrom1e.joinToString(",") { "?" }
-                val sql = "SELECT * FROM MasterData WHERE UPPER(TRIM(a1)) IN ($placeholders)"
-                conn.prepareStatement(sql).use { ps ->
-                    codesFrom1e.forEachIndexed { idx, code -> ps.setString(idx + 1, code) }
-                    ps.executeQuery().use { rs ->
-                        val meta = rs.metaData
-                        val colMap = (1..meta.columnCount).associate {
-                            meta.getColumnName(it).trim().lowercase() to it
-                        }
-                        fun col(vararg keys: String): String {
-                            for (k in keys) {
-                                val i = colMap[k.lowercase()]
-                                if (i != null) {
-                                    val v = rs.getString(i)?.trim().orEmpty()
-                                    if (v.isNotBlank()) return v
-                                }
-                            }
-                            return ""
-                        }
+            val distinctCodes = codesFrom1e.distinct()
 
+            if (distinctCodes.isNotEmpty()) {
+                val availableCols = mutableListOf<String>()
+                conn.createStatement().use { stmt ->
+                    stmt.executeQuery("PRAGMA table_info(MasterData)").use { rs ->
                         while (rs.next()) {
-                            val code = col("a1", "code", "empCode").uppercase()
-                            if (code.isNotBlank()) {
-                                masterMap[code] = AccountRow(
-                                    code = code,
-                                    name = col("a4", "name", "empName"),
-                                    designation = col("a8", "designation"),
-                                    branch = col("a10", "branch", "branchName"),
-                                    bank = col("a20", "bankName", "bank"),
-                                    accountNo = col("a21", "bankAccountNumber", "accountNo"),
-                                    ifscCode = col("a22", "ifscCodeBankBranchName", "ifscCode", "ifsc")
-                                )
+                            availableCols.add(rs.getString("name").trim())
+                        }
+                    }
+                }
+
+                val codeColName = availableCols.firstOrNull { col ->
+                    col.equals("a1", true) ||
+                    col.equals("code", true) ||
+                    col.equals("empcode", true) ||
+                    col.equals("emp_code", true) ||
+                    col.equals("empid", true) ||
+                    col.equals("emp_id", true) ||
+                    col.equals("id", true)
+                }
+
+                if (codeColName != null) {
+                    val placeholders = distinctCodes.joinToString(",") { "?" }
+                    val sql = """SELECT * FROM MasterData WHERE UPPER(TRIM("$codeColName")) IN ($placeholders)"""
+                    conn.prepareStatement(sql).use { ps ->
+                        distinctCodes.forEachIndexed { idx, code -> ps.setString(idx + 1, code) }
+                        ps.executeQuery().use { rs ->
+                            val meta = rs.metaData
+                            val colMap = (1..meta.columnCount).associate {
+                                meta.getColumnName(it).trim().lowercase() to it
+                            }
+                            fun col(vararg keys: String): String {
+                                for (k in keys) {
+                                    val i = colMap[k.lowercase()]
+                                    if (i != null) {
+                                        val v = rs.getString(i)?.trim().orEmpty()
+                                        if (v.isNotBlank()) return v
+                                    }
+                                }
+                                return ""
+                            }
+
+                            while (rs.next()) {
+                                val code = col(codeColName, "a1", "code", "empcode", "emp_code", "empid", "emp_id").uppercase()
+                                if (code.isNotBlank()) {
+                                    masterMap[code] = AccountRow(
+                                        code = code,
+                                        name = col("a4", "name", "empname", "emp_name", "employee_name"),
+                                        designation = col("a8", "designation", "desig"),
+                                        branch = col("a10", "branch", "branchname", "branch_name"),
+                                        bank = col("a20", "bankname", "bank_name", "bank"),
+                                        accountNo = col("a21", "bankaccountnumber", "bank_account_number", "accountno", "account_no", "acno"),
+                                        ifscCode = col("a22", "ifsccodebankbranchname", "ifsccode", "ifsc_code", "ifsc")
+                                    )
+                                }
                             }
                         }
                     }
@@ -531,7 +592,7 @@ fun Route.configureSalaryRoutes() {
             val csvBuilder = StringBuilder()
             csvBuilder.appendLine("slno,code,name,designation,branch,bank,accountno,ifsccode")
 
-            codesFrom1e.distinct().forEachIndexed { idx, code ->
+            distinctCodes.forEachIndexed { idx, code ->
                 val slno = (idx + 1).toString()
                 val m = masterMap[code]
                 val fb = fallbackObjByCode[code]
@@ -576,7 +637,6 @@ fun Route.configureSalaryRoutes() {
         }
     }
 }
-
 private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
     if (ids.isEmpty()) return emptyList()
 
@@ -621,7 +681,7 @@ private fun fetchSalariesDirectHttp(ids: List<String>): List<SalaryDto> {
         }
     }.toString()
 
-    val url = URL(tursoUrl)
+    val url = java.net.URI(tursoUrl).toURL()
     val conn = (url.openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
         connectTimeout = 15000
