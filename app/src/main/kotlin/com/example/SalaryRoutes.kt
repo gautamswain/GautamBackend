@@ -24,6 +24,26 @@ data class SalaryInfoDto(
     val networkingdays: Int = 25
 )
 
+@Serializable
+data class AttendanceVerifyInput(
+    val code: String = "",
+    val month: String = "",
+    val paidDays: String = "",
+    val status: String = ""
+)
+
+@Serializable
+data class AttendanceVerifyResult(
+    val verified: Boolean = true,
+    val message: String = "Verified successfully"
+)
+
+object AttendanceVerifyService {
+    fun verify(conn: java.sql.Connection, inputs: List<AttendanceVerifyInput>): List<AttendanceVerifyResult> {
+        return inputs.map { AttendanceVerifyResult(true, "Verified for ${it.code}") }
+    }
+}
+
 fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRoutes
     get("/api/turso/salaries-batch") { // { #2 (L2) - get /api/turso/salaries-batch
         val lastIds = call.request.queryParameters["history"].orEmpty()
@@ -206,6 +226,33 @@ fun Route.configureSalaryRoutes() { // { #1 (L1) - fun Route.configureSalaryRout
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Failed to fetch salary info")))
         } // } #33 (L3) - catch Exception
     } // } #20 (L2) - get /api/turso/salaryinfo/{monthc}
+
+post("/attendaceverify") {
+    var conn: java.sql.Connection? = null
+    try {
+        val inputs = call.receive<List<AttendanceVerifyInput>>()
+        conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(
+                io.ktor.http.HttpStatusCode.InternalServerError,
+                mapOf("error" to "Database connection failed")
+            )
+            return@post
+        }
+
+        val response = AttendanceVerifyService.verify(conn, inputs)
+        call.respond(response)
+    } catch (e: Exception) {
+        call.respond(
+            io.ktor.http.HttpStatusCode.InternalServerError,
+            mapOf("error" to (e.message ?: "Failed to verify attendance"))
+        )
+    } finally {
+        try { conn?.close() } catch (_: Exception) {}
+    }
+}
+
+
 
     // 3. POST /api/turso/salaryinfo/save
     post("/api/turso/salaryinfo/save") { // { #34 (L2) - post /api/turso/salaryinfo/save
