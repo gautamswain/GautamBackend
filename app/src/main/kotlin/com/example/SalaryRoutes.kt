@@ -56,14 +56,20 @@ object AttendanceVerifyService {
         return d.ifBlank { clean }
     }
 
-    private fun fetchSaltier(conn: java.sql.Connection, designation: String): String {
+    private fun fetchSaltier(conn: java.sql.Connection, designation: String, department: String = ""): String {
         val clean = designation.trim()
         if (clean.isBlank()) return ""
         try {
-            val sql = "SELECT tier FROM Designation WHERE UPPER(TRIM(designation)) = UPPER(TRIM(?)) OR UPPER(TRIM(shtcode)) = UPPER(TRIM(?)) LIMIT 1"
+            val sql = """
+                SELECT saltier FROM Designation 
+                WHERE UPPER(TRIM(designation)) = UPPER(TRIM(?)) OR UPPER(TRIM(shtcode)) = UPPER(TRIM(?))
+                ORDER BY CASE WHEN UPPER(TRIM(department)) = UPPER(TRIM(?)) THEN 0 ELSE 1 END
+                LIMIT 1
+            """.trimIndent()
             conn.prepareStatement(sql).use { ps ->
                 ps.setString(1, clean)
                 ps.setString(2, clean)
+                ps.setString(3, department.trim())
                 ps.executeQuery().use { rs ->
                     if (rs.next()) {
                         return rs.getString(1)?.trim().orEmpty()
@@ -147,7 +153,7 @@ object AttendanceVerifyService {
 
             val salary = d.salaryCode.ifBlank { d.slary }
             val salaryHistory = d.salaryHistory
-            val saltier = fetchSaltier(conn, d.designation)
+            val saltier = fetchSaltier(conn, d.designation, d.department)
 
             results.add(
                 AttendanceVerifySingleResult(

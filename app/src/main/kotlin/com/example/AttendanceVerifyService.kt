@@ -1,4 +1,4 @@
-package com.example.services // replace with your actual package name
+package com.example
 
 import io.ktor.client.*
 import io.ktor.client.request.*
@@ -28,24 +28,23 @@ data class AttendanceVerifyResultItem(
 )
 
 @Serializable
-data class AttendanceVerifyResponse(
+data class ClientAttendanceVerifyResponse(
     val results: List<AttendanceVerifyResultItem>
 )
 
-class AttendanceVerifyService(
+class ClientAttendanceVerifyService(
     private val httpClient: HttpClient,
-    private val tursoUrl: String,      // e.g. System.getenv("TURSO_DATABASE_URL")?.replace("libsql://", "https://")
-    private val tursoAuthToken: String // e.g. System.getenv("TURSO_AUTH_TOKEN")
+    private val tursoUrl: String,
+    private val tursoAuthToken: String
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun verifyRecords(records: List<AttendanceVerifyRequestItem>): AttendanceVerifyResponse {
-        if (records.isEmpty()) return AttendanceVerifyResponse(emptyList())
+    suspend fun verifyRecords(records: List<AttendanceVerifyRequestItem>): ClientAttendanceVerifyResponse {
+        if (records.isEmpty()) return ClientAttendanceVerifyResponse(emptyList())
 
         val codes = records.mapNotNull { it.code.trim().uppercase().takeIf { c -> c.isNotEmpty() } }.distinct()
-        if (codes.isEmpty()) return AttendanceVerifyResponse(emptyList())
+        if (codes.isEmpty()) return ClientAttendanceVerifyResponse(emptyList())
 
-        // Fetch matching rows from MasterData joined with Designation for Saltier
         val inClause = codes.joinToString(",") { "'${it.replace("'", "''")}'" }
         val sql = """
             SELECT 
@@ -58,9 +57,13 @@ class AttendanceVerifyService(
                 TRIM(COALESCE(m.a11, '')) AS doj,
                 TRIM(COALESCE(m.a20, '')) AS salary,
                 TRIM(COALESCE(m.salary_history, '')) AS salary_history,
-                TRIM(COALESCE(d.saltier, '')) AS saltier
+                TRIM(COALESCE((
+                    SELECT d.saltier FROM Designation d 
+                    WHERE LOWER(TRIM(d.designation)) = LOWER(TRIM(m.a8))
+                    ORDER BY CASE WHEN LOWER(TRIM(d.department)) = LOWER(TRIM(m.a9)) THEN 0 ELSE 1 END
+                    LIMIT 1
+                ), '')) AS saltier
             FROM MasterData m
-            LEFT JOIN Designation d ON LOWER(TRIM(m.a8)) = LOWER(TRIM(d.designation))
             WHERE UPPER(TRIM(m.a3)) IN ($inClause)
         """.trimIndent()
 
@@ -106,7 +109,7 @@ class AttendanceVerifyService(
             }
         }
 
-        return AttendanceVerifyResponse(results)
+        return ClientAttendanceVerifyResponse(results)
     }
 
     private data class MasterDbRow(
