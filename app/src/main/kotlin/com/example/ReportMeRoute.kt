@@ -87,6 +87,39 @@ fun Route.reportMeRouting(getConnection: () -> Connection?) {
         }
     }
 
+    // GET /api/turso/salary-master-changes
+    get("/api/turso/salary-master-changes") {
+        val conn = getConnection() ?: run {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+            return@get
+        }
+
+        try {
+            conn.use { c ->
+                try {
+                    c.createStatement().use { stmt ->
+                        stmt.execute("ALTER TABLE reports ADD COLUMN h TEXT DEFAULT '[]'")
+                    }
+                } catch (_: Exception) {}
+
+                var jsonH = "[]"
+                c.createStatement().use { stmt ->
+                    stmt.executeQuery("SELECT h FROM reports WHERE id = '1' OR slno = '1' LIMIT 1").use { rs ->
+                        if (rs.next()) {
+                            jsonH = rs.getString("h")?.trim().orEmpty().ifBlank { "[]" }
+                        }
+                    }
+                }
+                call.respondText(jsonH, ContentType.Application.Json, HttpStatusCode.OK)
+            }
+        } catch (e: Exception) {
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf("error" to (e.localizedMessage ?: e.message ?: "Failed to fetch salary-master-changes"))
+            )
+        }
+    }
+
     // GET /api/turso/leftstaff
     get("/api/turso/leftstaff") {
         val conn = getConnection() ?: run {
@@ -167,9 +200,9 @@ fun Route.reportMeRouting(getConnection: () -> Connection?) {
     // GET /api/turso/reports/column/{col} (e.g. /api/turso/reports/column/d or /api/turso/reports/column/e)
     get("/api/turso/reports/column/{col}") {
         val colParam = call.parameters["col"]?.trim()?.lowercase().orEmpty()
-        val validCols = setOf("a", "b", "c", "d", "e", "f", "g", "cr")
+        val validCols = setOf("a", "b", "c", "d", "e", "f", "g", "h", "cr")
         if (colParam !in validCols) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid column. Valid columns are a, b, c, d, e, f, g"))
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid column. Valid columns are a, b, c, d, e, f, g, h"))
             return@get
         }
 
