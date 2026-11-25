@@ -89,36 +89,42 @@ fun Route.reportMeRouting(getConnection: () -> Connection?) {
 
     // GET /api/turso/salary-master-changes
     get("/api/turso/salary-master-changes") {
-        val conn = getConnection() ?: run {
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Database connection failed"))
+    var conn: java.sql.Connection? = null
+    try {
+        conn = TursoDatabaseService.getConnection()
+        if (conn == null) {
+            call.respond(
+                io.ktor.http.HttpStatusCode.InternalServerError,
+                mapOf("error" to "Database connection failed")
+            )
             return@get
         }
 
-        try {
-            conn.use { c ->
-                try {
-                    c.createStatement().use { stmt ->
-                        stmt.execute("ALTER TABLE reports ADD COLUMN h TEXT DEFAULT '[]'")
-                    }
-                } catch (_: Exception) {}
-
-                var jsonH = "[]"
-                c.createStatement().use { stmt ->
-                    stmt.executeQuery("SELECT h FROM reports WHERE id = '1' OR slno = '1' LIMIT 1").use { rs ->
-                        if (rs.next()) {
-                            jsonH = rs.getString("h")?.trim().orEmpty().ifBlank { "[]" }
-                        }
-                    }
-                }
-                call.respondText(jsonH, ContentType.Application.Json, HttpStatusCode.OK)
+        var jsonH = "[]"
+        conn.createStatement().use { stmt ->
+            try {
+                stmt.execute("ALTER TABLE reports ADD COLUMN h TEXT DEFAULT '[]'")
+            } catch (_: Exception) {
+                // Column 'h' already exists
             }
-        } catch (e: Exception) {
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                mapOf("error" to (e.localizedMessage ?: e.message ?: "Failed to fetch salary-master-changes"))
-            )
+
+            stmt.executeQuery("SELECT h FROM reports WHERE id = '1'").use { rs ->
+                if (rs.next()) {
+                    jsonH = rs.getString(1)?.takeIf { it.isNotBlank() } ?: "[]"
+                }
+            }
         }
+
+        call.respondText(jsonH, io.ktor.http.ContentType.Application.Json)
+    } catch (e: Exception) {
+        call.respond(
+            io.ktor.http.HttpStatusCode.InternalServerError,
+            mapOf("error" to (e.message ?: "Failed to fetch 1h salary-master-changes"))
+        )
+    } finally {
+        try { conn?.close() } catch (_: Exception) {}
     }
+}
 
     // GET /api/turso/leftstaff
     get("/api/turso/leftstaff") {
