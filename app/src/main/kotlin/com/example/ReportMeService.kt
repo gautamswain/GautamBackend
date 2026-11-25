@@ -544,37 +544,46 @@ object ReportMeService { // { #1 (L1) - object ReportMeService
         return changeItems
     } // } #54 (L1) - fun compareLastSalaryWithMasterAndBuildChanges
 
-    fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") { // { #82 (L1) - fun generateAndSaveReport
-        val safeX = x.replace("'", "''")
-        val safeY = y.replace("'", "''")
+    fun generateAndSaveReport(conn: Connection, x: String, y: String, fieldName: String = "a") {
+    val allowedCols = setOf("a", "b", "c", "d", "e", "f", "g", "h", "i")
+    if (fieldName !in allowedCols) return
 
-        conn.createStatement().use { stmt -> // { #83 (L2) - stmt.use
-            try { // { #84 (L3) - try
-                var exists = false
-                stmt.executeQuery("SELECT COUNT(*) FROM reports WHERE id = '$safeX'").use { rs -> // { #85 (L4) - rs.use
-                    if (rs.next()) exists = rs.getInt(1) > 0
-                } // } #85 (L4) - rs.use
-                if (exists) { // { #86 (L3) - if exists
-                    stmt.execute("UPDATE reports SET $fieldName = '$safeY' WHERE id = '$safeX'")
-                } else { // } #86 (L3) - if exists / { #87 (L3) - else
-                    stmt.execute("INSERT INTO reports (id, cr, $fieldName) VALUES ('$safeX', 'm', '$safeY')")
-                } // } #87 (L3) - else
-            } catch (_: Exception) { // } #84 (L3) - try / { #88 (L3) - catch Exception
-                var exists = false
-                try { // { #89 (L4) - try fallback
-                    stmt.executeQuery("SELECT COUNT(*) FROM reports WHERE slno = '$safeX'").use { rs -> // { #90 (L5) - rs.use
-                        if (rs.next()) exists = rs.getInt(1) > 0
-                    } // } #90 (L5) - rs.use
-                } catch (_: Exception) {} // } #89 (L4) - try fallback
+    try {
+        conn.createStatement().use { stmt ->
+            try {
+                stmt.execute("ALTER TABLE reports ADD COLUMN $fieldName TEXT")
+            } catch (_: Exception) {
+                // Column already exists
+            }
+        }
 
-                if (exists) { // { #91 (L4) - if exists
-                    stmt.execute("UPDATE reports SET $fieldName = '$safeY' WHERE slno = '$safeX'")
-                } else { // } #91 (L4) - if exists / { #92 (L4) - else
-                    stmt.execute("INSERT INTO reports (emp_id, $fieldName) VALUES ('$safeX', '$safeY')")
-                } // } #92 (L4) - else
-            } // } #88 (L3) - catch Exception
-        } // } #83 (L2) - stmt.use
-    } // } #82 (L1) - fun generateAndSaveReport
+        var exists = false
+        conn.prepareStatement("SELECT COUNT(*) FROM reports WHERE id = ?").use { checkStmt ->
+            checkStmt.setString(1, x)
+            checkStmt.executeQuery().use { rs ->
+                if (rs.next()) exists = rs.getInt(1) > 0
+            }
+        }
+
+        if (exists) {
+            conn.prepareStatement("UPDATE reports SET $fieldName = ? WHERE id = ?").use { updateStmt ->
+                updateStmt.setString(1, y)
+                updateStmt.setString(2, x)
+                updateStmt.executeUpdate()
+            }
+        } else {
+            conn.prepareStatement("INSERT INTO reports (id, cr, $fieldName) VALUES (?, 'm', ?)").use { insertStmt ->
+                insertStmt.setString(1, x)
+                insertStmt.setString(2, y)
+                insertStmt.executeUpdate()
+            }
+        }
+        println("REPORTME SAVE OK: id=$x, col=$fieldName, len=${y.length}")
+    } catch (e: Exception) {
+        println("REPORTME SAVE ERROR (id=$x, col=$fieldName): ${e.message}")
+        e.printStackTrace()
+    }
+}
 
     fun generateAndSaveReport(conn: Connection): ReportResult = processAndSave(conn)
 
