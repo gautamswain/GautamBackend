@@ -31,11 +31,89 @@ data class AttendanceVerifyResponse(
 )
 
 object AttendanceVerifyService {
-    private fun normalizeDate(raw: String?): String {
+    private fun parseAnyDate(raw: String?): java.time.LocalDate? {
         val clean = raw?.trim().orEmpty()
+        if (clean.isBlank()) return null
+        val formatters = listOf(
+            java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("d-M-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("MM-dd-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("M-d-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"),
+            java.time.format.DateTimeFormatter.ofPattern("dd-MMM-yyyy", java.util.Locale.ENGLISH),
+            java.time.format.DateTimeFormatter.ofPattern("d-MMM-yyyy", java.util.Locale.ENGLISH)
+        )
+        for (fmt in formatters) {
+            try {
+                return java.time.LocalDate.parse(clean.take(10), fmt)
+            } catch (_: Exception) {}
+        }
+        try {
+            return java.time.LocalDate.parse(clean.take(10))
+        } catch (_: Exception) {}
+        return null
+    }
+
+    private fun datesMatch(inputDoj: String, dbDoj: String): Boolean {
+        val inClean = inputDoj.trim()
+        val dbClean = dbDoj.trim()
+        if (inClean.isBlank() || dbClean.isBlank()) return true
+        if (inClean == dbClean) return true
+
+        val date1 = parseAnyDate(inClean)
+        val date2 = parseAnyDate(dbClean)
+
+        if (date1 != null && date2 != null) {
+            if (date1 == date2) return true
+        }
+
+        val parts = inClean.split(Regex("[-/]"))
+        if (parts.size == 3 && parts[0].length <= 2 && parts[1].length <= 2 && parts[2].length == 4) {
+            val swapped = "${parts[1]}-${parts[0]}-${parts[2]}"
+            val dateSwapped = parseAnyDate(swapped)
+            if (dateSwapped != null && date2 != null && dateSwapped == date2) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun formatShortMonth(raw: String): String {
+        val clean = raw.trim()
         if (clean.isBlank()) return ""
-        val d = DateUtils.toDisplayDate(clean)
-        return d.ifBlank { clean }
+        if (Regex("^[A-Za-z]{3}-\\d{4}$").matches(clean) || clean.startsWith("M", ignoreCase = true)) {
+            return clean
+        }
+
+        val formatters = listOf(
+            java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("d-M-yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"),
+            java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("d/M/yyyy"),
+            java.time.format.DateTimeFormatter.ofPattern("dd-MMM-yyyy", java.util.Locale.ENGLISH),
+            java.time.format.DateTimeFormatter.ofPattern("d-MMM-yyyy", java.util.Locale.ENGLISH),
+            java.time.format.DateTimeFormatter.ofPattern("MMM dd yyyy HH:mm:ss", java.util.Locale.ENGLISH)
+        )
+        for (fmt in formatters) {
+            try {
+                val parsed = java.time.LocalDate.parse(clean.take(10), fmt)
+                return parsed.format(java.time.format.DateTimeFormatter.ofPattern("MMM-yyyy", java.util.Locale.ENGLISH))
+            } catch (_: Exception) {}
+        }
+
+        val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        val yearMatch = Regex("\\b20\\d{2}\\b").find(clean)
+        val monthMatch = monthNames.firstOrNull { clean.contains(it, ignoreCase = true) }
+        if (yearMatch != null && monthMatch != null) {
+            val properMonth = monthMatch.lowercase().replaceFirstChar { it.titlecase(java.util.Locale.ENGLISH) }
+            return "$properMonth-${yearMatch.value}"
+        }
+
+        return clean
     }
 
     private fun fetchSaltier(conn: Connection, designation: String, department: String = ""): String {
@@ -83,7 +161,8 @@ object AttendanceVerifyService {
                     while (rs.next()) {
                         val empId = (rs.getString("emp_id_2") ?: "").trim().uppercase()
                         if (empId.isNotBlank()) {
-                            val month = (rs.getString("month") ?: "").trim()
+                            val rawMonth = (rs.getString("month") ?: "").trim()
+                            val shortMonth = formatShortMonth(rawMonth)
                             val desig = (rs.getString("designation_7") ?: "").trim()
                             val branch = (rs.getString("branch_name_9") ?: "").trim()
                             val grossEarn = (rs.getString("gross_earnings_28") ?: "").trim()
@@ -91,7 +170,7 @@ object AttendanceVerifyService {
                             val netAmt = (rs.getString("net_amount_30") ?: "").trim()
                             val status = (rs.getString("status_00") ?: "").trim()
 
-                            val formatted = "$month-$desig-$branch-$grossEarn,$grossDed,$netAmt,$status"
+                            val formatted = "$shortMonth-$desig-$branch-$grossEarn,$grossDed,$netAmt,$status"
                             recordsByEmp.getOrPut(empId) { mutableListOf() }.add(formatted)
                         }
                     }
@@ -176,10 +255,8 @@ object AttendanceVerifyService {
             if (input.lender.isNotBlank() && !input.lender.trim().equals(d.lender.trim(), ignoreCase = true)) {
                 mismatches.add("Lender mismatch: input '${input.lender}' vs db '${d.lender}'")
             }
-            val inputDojNorm = normalizeDate(input.doj)
-            val dbDojNorm = normalizeDate(d.dojInAdhikar)
-            if (inputDojNorm.isNotBlank() && dbDojNorm.isNotBlank() && inputDojNorm != dbDojNorm) {
-                mismatches.add("DOJ mismatch: input '${input.doj}' vs db '${d.dojInAdhikar}'")
+            if (!datesMatch(input.doj, d.dojInAdhikar)) {
+                mismatches.add("DOJ mismatch: input '${input.doj.trim()}' vs db '${d.dojInAdhikar}'")
             }
 
             val salary = d.salaryCode.ifBlank { d.slary }
