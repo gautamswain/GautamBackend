@@ -195,21 +195,45 @@ object SalarySlipGenerator {
         val uan = cleanField(master?.epfUanNo)
         val esi = cleanField(master?.esiNo)
 
-        val rawEarnings = listOf(
-            SalaryHead("Basic + DA", sal.basicDa9.toDoubleOrNull() ?: 0.0),
-            SalaryHead("HRA", sal.hra10.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Conveyance", sal.conveyance11.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Medical Allowance", sal.medicalAllowance12.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Education Allowance", sal.educationAllowance13.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Lunch / Canteen Allowance", sal.lunchCanteenAllowance14.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Special Allowance", sal.specialAllowance15.toDoubleOrNull() ?: 0.0),
-            SalaryHead("HRA Variable", sal.hraVariable39.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Other Allowance", sal.otherAllowance17.toDoubleOrNull() ?: 0.0),
-            SalaryHead("DA / AOSA", sal.daAosa40.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Arrears / Increment", sal.arrearsIncrement41.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Other Earnings", sal.otherEarnings46.toDoubleOrNull() ?: 0.0),
-            SalaryHead("Back Salary", sal.backSalaryGive.toDoubleOrNull() ?: 0.0)
-        )
+        val recordIdNum = sal.id.trim().toLongOrNull() ?: 0L
+        val isNewSalaryStructure = recordIdNum >= 28681L
+
+        val rawEarnings = if (isNewSalaryStructure) {
+            listOf(
+                // id >= 28681: First 4 fixed headings (Conveyance -> Statutory Bonus, Medical Allowance -> Special Allowance)
+                SalaryHead("Basic + D.A", sal.basicDa9.toDoubleOrNull() ?: 0.0),
+                SalaryHead("HRA", sal.hra10.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Statutory Bonus", sal.conveyance11.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Special Allowance", sal.medicalAllowance12.toDoubleOrNull() ?: 0.0),
+                // Remaining headings
+                SalaryHead("Education Allowance", sal.educationAllowance13.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Lunch / Canteen Allowance", sal.lunchCanteenAllowance14.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Other Special Allowance", sal.specialAllowance15.toDoubleOrNull() ?: 0.0),
+                SalaryHead("HRA Variable", sal.hraVariable39.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Other Allowance", sal.otherAllowance17.toDoubleOrNull() ?: 0.0),
+                SalaryHead("DA / AOSA", sal.daAosa40.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Arrears / Increment", sal.arrearsIncrement41.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Other Earnings", sal.otherEarnings46.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Back Salary", sal.backSalaryGive.toDoubleOrNull() ?: 0.0)
+            )
+        } else {
+            // id <= 28680: Classic headings
+            listOf(
+                SalaryHead("Basic + DA", sal.basicDa9.toDoubleOrNull() ?: 0.0),
+                SalaryHead("HRA", sal.hra10.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Conveyance", sal.conveyance11.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Medical Allowance", sal.medicalAllowance12.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Education Allowance", sal.educationAllowance13.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Lunch / Canteen Allowance", sal.lunchCanteenAllowance14.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Special Allowance", sal.specialAllowance15.toDoubleOrNull() ?: 0.0),
+                SalaryHead("HRA Variable", sal.hraVariable39.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Other Allowance", sal.otherAllowance17.toDoubleOrNull() ?: 0.0),
+                SalaryHead("DA / AOSA", sal.daAosa40.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Arrears / Increment", sal.arrearsIncrement41.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Other Earnings", sal.otherEarnings46.toDoubleOrNull() ?: 0.0),
+                SalaryHead("Back Salary", sal.backSalaryGive.toDoubleOrNull() ?: 0.0)
+            )
+        }
 
         val rawDeductions = listOf(
             SalaryHead("EPF", sal.epf5549.toDoubleOrNull() ?: 0.0),
