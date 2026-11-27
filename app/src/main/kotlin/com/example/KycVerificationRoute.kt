@@ -6,16 +6,19 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import net.sourceforge.tess4j.Tesseract
-import org.apache.pdfbox.pdmodel.PDDocument
+import org.apache.pdfbox.Loader
 import org.apache.pdfbox.rendering.ImageType
 import org.apache.pdfbox.rendering.PDFRenderer
 import org.apache.pdfbox.text.PDFTextStripper
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.sql.Connection
@@ -69,7 +72,12 @@ object KycDocumentVerifier {
 
     private fun createOcrEngine(): Tesseract {
         return Tesseract().apply {
-            val tessPath = System.getenv("TESSDATA_PREFIX") ?: "/usr/share/tesseract-ocr/5/tessdata"
+            val tessPath = listOfNotNull(
+                System.getenv("TESSDATA_PREFIX"),
+                "/usr/share/tesseract-ocr/5/tessdata",
+                "/usr/share/tesseract-ocr/4.00/tessdata",
+                "/usr/share/tessdata"
+            ).firstOrNull { File(it).exists() } ?: "/usr/share/tesseract-ocr/5/tessdata"
             setDatapath(tessPath)
             setLanguage("eng")
             setOcrEngineMode(1)
@@ -168,7 +176,7 @@ object KycDocumentVerifier {
     }
 
     private fun extractTextFromPdf(pdfBytes: ByteArray, ocr: Tesseract): Pair<String, String> {
-        PDDocument.load(ByteArrayInputStream(pdfBytes)).use { doc ->
+        Loader.loadPDF(pdfBytes).use { doc ->
             val stripper = PDFTextStripper()
             val embeddedText = stripper.getText(doc).orEmpty()
             if (embeddedText.replace(Regex("\\s+"), "").length >= 40) {
@@ -179,7 +187,7 @@ object KycDocumentVerifier {
             val sb = StringBuilder()
             val maxPages = minOf(doc.numberOfPages, 6)
             for (pageIdx in 0 until maxPages) {
-                val pageImage = renderer.renderImageWithDPI(pageIdx, 250f, ImageType.RGB)
+                val pageImage = renderer.renderImageWithDPI(pageIdx, 200f, ImageType.GRAY)
                 sb.append(ocr.doOCR(pageImage)).append("\n\u000C\n")
             }
             return sb.toString() to "Tesseract-PDF"
@@ -321,8 +329,8 @@ object KycDocumentVerifier {
 
         var anyFallbackTriggered = false
 
-        for (doc in docs) {
-            val detail = initialResult.filesProcessed.find { it.fileName == doc.fileName }
+        docs.forEachIndexed { idx, doc ->
+            val detail = initialResult.filesProcessed.getOrNull(idx)
             val needsFallback = (detail?.unreadableScan == true) ||
                 (coreMissing && detail?.matchedCategories?.isEmpty() == true)
 
@@ -560,8 +568,10 @@ fun Route.kycVerificationRoutes(dbConnectionProvider: () -> Connection) {
                 KycDocumentVerifier.fetchMasterRecord(conn, empCode)
             } ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "Employee $empCode not found in MasterData"))
 
-            val pass1Docs = KycDocumentVerifier.extractFilesAndTextPass1(uploadedFiles)
-            val verificationResult = KycDocumentVerifier.verifyDocumentsWithFallback(master, pass1Docs)
+            val verificationResult = withContext(Dispatchers.IO) {
+                val pass1Docs = KycDocumentVerifier.extractFilesAndTextPass1(uploadedFiles)
+                KycDocumentVerifier.verifyDocumentsWithFallback(master, pass1Docs)
+            }
 
             call.respond(HttpStatusCode.OK, verificationResult)
         } catch (e: Exception) {

@@ -69,6 +69,8 @@ dependencies {
     implementation("org.eclipse.angus:angus-activation:2.0.1")
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jsoup:jsoup:1.18.3")
+    implementation("org.apache.pdfbox:pdfbox:2.0.31")
+    implementation("net.sourceforge.tess4j:tess4j:5.11.0")
 
 // Apache POI for Excel (.xls and .xlsx) reading
     implementation("org.apache.poi:poi:5.2.5")
