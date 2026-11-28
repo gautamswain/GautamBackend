@@ -154,25 +154,26 @@ object SalarySlipGenerator {
 
     fun fetchSalaryRecord(conn: Connection, empCode: String, monthQuery: String): SalaryDto? {
         val cleanCode = empCode.trim()
-        val sql = if (monthQuery.isNotBlank()) {
-            "SELECT * FROM SalaryHistory WHERE (UPPER(TRIM(emp_id_2)) = UPPER(TRIM(?)) OR UPPER(TRIM(id)) = UPPER(TRIM(?))) AND UPPER(TRIM(month)) = UPPER(TRIM(?)) LIMIT 1"
-        } else {
-            "SELECT * FROM SalaryHistory WHERE UPPER(TRIM(emp_id_2)) = UPPER(TRIM(?)) OR UPPER(TRIM(id)) = UPPER(TRIM(?)) ORDER BY rowid DESC LIMIT 1"
-        }
+        val sql = "SELECT * FROM SalaryHistory WHERE UPPER(TRIM(emp_id_2)) = UPPER(TRIM(?)) OR UPPER(TRIM(id)) = UPPER(TRIM(?)) ORDER BY rowid DESC"
+        val rows = mutableListOf<SalaryDto>()
 
         conn.prepareStatement(sql).use { stmt ->
             stmt.setString(1, cleanCode)
             stmt.setString(2, cleanCode)
-            if (monthQuery.isNotBlank()) {
-                stmt.setString(3, monthQuery)
-            }
             stmt.executeQuery().use { rs ->
-                if (rs.next()) {
-                    return parseSalaryDto(rs)
+                while (rs.next()) {
+                    rows.add(parseSalaryDto(rs))
                 }
             }
         }
-        return null
+
+        if (rows.isEmpty()) return null
+        if (monthQuery.isBlank()) return rows.first()
+
+        val targetMonthFormatted = formatMonthName(monthQuery).lowercase()
+        return rows.find { formatMonthName(it.month).lowercase() == targetMonthFormatted }
+            ?: rows.find { it.month.trim().equals(monthQuery.trim(), ignoreCase = true) }
+            ?: rows.first()
     }
 
     fun generateHtml(sal: SalaryDto, master: MasterDataDto?): String {
@@ -200,12 +201,10 @@ object SalarySlipGenerator {
 
         val rawEarnings = if (isNewSalaryStructure) {
             listOf(
-                // id >= 28681: First 4 fixed headings (Conveyance -> Statutory Bonus, Medical Allowance -> Special Allowance)
                 SalaryHead("Basic + D.A", sal.basicDa9.toDoubleOrNull() ?: 0.0),
                 SalaryHead("HRA", sal.hra10.toDoubleOrNull() ?: 0.0),
                 SalaryHead("Statutory Bonus", sal.conveyance11.toDoubleOrNull() ?: 0.0),
                 SalaryHead("Special Allowance", sal.medicalAllowance12.toDoubleOrNull() ?: 0.0),
-                // Remaining headings
                 SalaryHead("Education Allowance", sal.educationAllowance13.toDoubleOrNull() ?: 0.0),
                 SalaryHead("Lunch / Canteen Allowance", sal.lunchCanteenAllowance14.toDoubleOrNull() ?: 0.0),
                 SalaryHead("Other Special Allowance", sal.specialAllowance15.toDoubleOrNull() ?: 0.0),
@@ -217,7 +216,6 @@ object SalarySlipGenerator {
                 SalaryHead("Back Salary", sal.backSalaryGive.toDoubleOrNull() ?: 0.0)
             )
         } else {
-            // id <= 28680: Classic headings
             listOf(
                 SalaryHead("Basic + DA", sal.basicDa9.toDoubleOrNull() ?: 0.0),
                 SalaryHead("HRA", sal.hra10.toDoubleOrNull() ?: 0.0),
@@ -247,7 +245,6 @@ object SalarySlipGenerator {
 
         val validEarnings = rawEarnings.filter { it.label.isNotBlank() && it.amount > 0.0 }
         val validDeductions = rawDeductions.filter { it.label.isNotBlank() && it.amount > 0.0 }
-
         val grossEarnings = sal.grossEarnings28.toDoubleOrNull() ?: validEarnings.sumOf { it.amount }
         val grossDeductions = sal.grossDeductions29.toDoubleOrNull() ?: validDeductions.sumOf { it.amount }
         val netAmount = sal.netAmount30.toDoubleOrNull() ?: (grossEarnings - grossDeductions)
@@ -421,7 +418,8 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
             dbConnectionProvider().use { conn ->
                 val sal = SalarySlipGenerator.fetchSalaryRecord(conn, code, month)
                     ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "Salary record not found for code: $code"))
-                val master = TursoDatabaseService.getRecordByEmpId(code)
+                val actualEmpCode = sal.empId2.ifBlank { code }
+                val master = TursoDatabaseService.getRecordByEmpId(actualEmpCode)
                 val html = SalarySlipGenerator.generateHtml(sal, master).replace("&nbsp;", "&#160;")
                 call.respondText(html, ContentType.Text.Html, HttpStatusCode.OK)
             }
@@ -446,10 +444,11 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                     val sal = SalarySlipGenerator.fetchSalaryRecord(conn, row.code, row.month)
                         ?: continue
 
-                    val master = TursoDatabaseService.getRecordByEmpId(row.code)
+                    val actualEmpCode = sal.empId2.ifBlank { row.code }
+                    val master = TursoDatabaseService.getRecordByEmpId(actualEmpCode)
                     val html = SalarySlipGenerator.generateHtml(sal, master).replace("&nbsp;", "&#160;")
 
-                    val safeCode = row.code.replace(Regex("[^A-Za-z0-9_-]"), "_")
+                    val safeCode = actualEmpCode.replace(Regex("[^A-Za-z0-9_-]"), "_")
                     val formattedMonth = SalarySlipGenerator.formatMonthName(row.month.ifBlank { sal.month })
                     val monthStr = formattedMonth.replace(Regex("[^A-Za-z0-9_-]"), "_")
                     val fileName = "Salary_Slip_${safeCode}_${monthStr}.pdf"
@@ -465,7 +464,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                     if (req.saveToDrive) {
                         try {
                             GoogleDriveReportService.uploadStaffFile(
-                                empCode = row.code,
+                                empCode = actualEmpCode,
                                 fileName = fileName,
                                 mimeType = "application/pdf",
                                 bytes = pdfBytes
@@ -475,7 +474,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
 
                     if (req.sendEmail) {
                         try {
-                            val empModel = BulkLetterService.fetchEmployeeFromMasterData(conn, row.code)
+                            val empModel = BulkLetterService.fetchEmployeeFromMasterData(conn, actualEmpCode)
                             if (empModel != null) {
                                 val toMail = BulkLetterService.resolveEmailField(conn, "ownp,owno", empModel)
                                 if (toMail.isNotBlank()) {
@@ -503,14 +502,7 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
 
             if (singlePdfs.size == 1) {
                 val (fileName, bytes) = singlePdfs.first()
-                call.response.header(
-                    HttpHeaders.ContentDisposition,
-                    ContentDisposition.Attachment.withParameter(
-                        ContentDisposition.Parameters.FileName,
-                        fileName
-                    ).toString()
-                )
-                call.respondBytes(bytes, ContentType.Application.Pdf)
+                call.respondBytes(bytes, ContentType.Application.Pdf, HttpStatusCode.OK)
             } else {
                 ZipOutputStream(zipStream).use { zip ->
                     for ((fileName, bytes) in singlePdfs) {
@@ -519,18 +511,11 @@ fun Route.salarySlipRoutes(dbConnectionProvider: () -> Connection) {
                         zip.closeEntry()
                     }
                 }
-                call.response.header(
-                    HttpHeaders.ContentDisposition,
-                    ContentDisposition.Attachment.withParameter(
-                        ContentDisposition.Parameters.FileName,
-                        "Salary_Slips.zip"
-                    ).toString()
-                )
-                call.respondBytes(zipStream.toByteArray(), ContentType.Application.Pdf)
+                call.respondBytes(zipStream.toByteArray(), ContentType.Application.Zip, HttpStatusCode.OK)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.localizedMessage ?: "Generation failed")))
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (t.localizedMessage ?: t.message ?: "Generation failed")))
         }
     }
 }

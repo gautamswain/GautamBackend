@@ -131,7 +131,8 @@ fun resolveDesignationFromDb(conn: Connection, rawDesignation: String): String {
 fun Route.commentsQueueRoute() {
 
     // 1. Add any record (MUP / NewJ / RewJ / MSG) to Comments Queue
-    //    Automatically detects duplicate in MasterData -> sets separater = 'RewJ' & attaches existing Code_2
+    //    - Automatically detects duplicate in MasterData -> sets separater = 'RewJ' & attaches existing Code_2
+    //    - Supports optional "autoConfirm": true for MUP -> updates MasterData & inserts as 'CONF' in 1 call
     post("/api/turso/add-to-queue") {
         try {
             val bodyText = call.receiveText()
@@ -150,6 +151,7 @@ fun Route.commentsQueueRoute() {
                 ?: bodyText
             val wef = (jsonElement?.get("wef")?.jsonPrimitive?.contentOrNull
                 ?: java.time.LocalDate.now().toString()).ifBlank { java.time.LocalDate.now().toString() }
+            val autoConfirm = jsonElement?.get("autoConfirm")?.jsonPrimitive?.booleanOrNull ?: false
 
             var matchedOldCode = ""
 
@@ -254,6 +256,38 @@ fun Route.commentsQueueRoute() {
                 }
             }
 
+            // If MUP + autoConfirm == true -> apply update directly to MasterData & log as CONF in 1 call
+            val isAutoConfirmMup = separater.equals("MUP", ignoreCase = true) && autoConfirm
+            if (isAutoConfirmMup) {
+                val obj = Json.parseToJsonElement(jsonDetails).jsonObject
+                val empCode = obj["Code_2"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                val skipCols = setOf("id", "sl_no_1", "Code_2", "employee_name_3")
+                val updates = obj.filterKeys { it !in skipCols && it.matches(Regex("^[a-zA-Z0-9_]+$")) }
+
+                if (empCode.isBlank() || updates.isEmpty()) {
+                    return@post call.respond(
+                        HttpStatusCode.BadRequest,
+                        mapOf("error" to "Missing Code_2 or updatable fields in jsondetails")
+                    )
+                }
+
+                val setClause = updates.keys.joinToString(", ") { "$it = ?" }
+                val updateArgs = updates.values.map { it.jsonPrimitive.content } + empCode
+                val (mupOk, mupResp) = executeTursoHttpSql(
+                    "UPDATE MasterData SET $setClause WHERE LOWER(TRIM(Code_2)) = LOWER(TRIM(?))",
+                    updateArgs
+                )
+                if (!mupOk) {
+                    return@post call.respond(
+                        HttpStatusCode.InternalServerError,
+                        mapOf("error" to "MasterData autoConfirm update failed: $mupResp")
+                    )
+                }
+
+                separater = "CONF"
+                matchedOldCode = empCode
+            }
+
             var (ok, resp) = executeTursoHttpSql(
                 "INSERT INTO Comments (slno, separater, jsondetails, wef) VALUES (?, ?, ?, ?)",
                 listOf(slno, separater, jsonDetails, wef)
@@ -269,16 +303,20 @@ fun Route.commentsQueueRoute() {
             }
 
             if (ok) {
-                val msg = if (separater == "RewJ") {
-                    "Duplicate found ($matchedOldCode) -> Added to queue as RewJ with Code attached"
-                } else {
-                    "Record successfully added to queue"
+                if (isAutoConfirmMup) {
+                    triggerReportMeServiceAsync()
+                }
+
+                val msg = when {
+                    isAutoConfirmMup -> "MasterData updated & logged as CONF in single call for $matchedOldCode"
+                    separater == "RewJ" -> "Duplicate found ($matchedOldCode) -> Added to queue as RewJ with Code attached"
+                    else -> "Record successfully added to queue"
                 }
                 println("TURSO HTTP INSERT SUCCESS: separater=$separater, slno=$slno, code=$matchedOldCode")
                 call.respond(
                     HttpStatusCode.OK,
                     mapOf(
-                        "status" to "success",
+                        "status" to if (isAutoConfirmMup) "confirmed" else "success",
                         "separater" to separater,
                         "code" to matchedOldCode,
                         "message" to msg
@@ -294,7 +332,7 @@ fun Route.commentsQueueRoute() {
         }
     }
 
-    // 2. STAGE 1: Fetch Comments with formatted 'display_message' for NewJ & RewJ
+    // 2. STAGE 1: Fetch Comments with formatted 'display_message' for NewJ, RewJ & MUP
     get("/api/turso/comments/{separater}") {
         val separater = call.parameters["separater"] ?: "PENDING"
         val conn = TursoDatabaseService.getConnection()
@@ -306,7 +344,7 @@ fun Route.commentsQueueRoute() {
         try {
             val list = mutableListOf<CommentRecordMap>()
             val stmt = conn.createStatement()
-            val rs = stmt.executeQuery("SELECT rowid AS id, slno, separater, jsondetails, wef FROM Comments WHERE UPPER(TRIM(separater)) = UPPER(TRIM('$separater')) ORDER BY rowid DESC;")
+            val rs = stmt.executeQuery("SELECT COALESCE(id, rowid) AS id, slno, separater, jsondetails, wef FROM Comments WHERE UPPER(TRIM(separater)) = UPPER(TRIM('$separater')) ORDER BY rowid DESC;")
             val meta = rs.metaData
             val colCount = meta.columnCount
 
@@ -381,7 +419,7 @@ fun Route.commentsQueueRoute() {
         try {
             var storedJson = ""
 
-            val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE id = ?")
+            val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE COALESCE(id, rowid) = ?")
             selectPs.setString(1, commentId)
             val rs = selectPs.executeQuery()
             if (rs.next()) {
@@ -486,7 +524,7 @@ fun Route.commentsQueueRoute() {
             }
 
             executeTursoHttpSql(
-                "UPDATE Comments SET separater = 'CONF' WHERE id = ?",
+                "UPDATE Comments SET separater = 'CONF' WHERE COALESCE(id, rowid) = ?",
                 listOf(commentId)
             )
 
@@ -535,7 +573,7 @@ fun Route.commentsQueueRoute() {
         try {
             var storedJson = ""
 
-            val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE id = ?")
+            val selectPs = conn.prepareStatement("SELECT jsondetails, wef FROM Comments WHERE COALESCE(id, rowid) = ?")
             selectPs.setString(1, commentId)
             val rs = selectPs.executeQuery()
             if (rs.next()) {
@@ -612,7 +650,7 @@ fun Route.commentsQueueRoute() {
                 return@post
             }
 
-            executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE id = ?", listOf(commentId))
+            executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE COALESCE(id, rowid) = ?", listOf(commentId))
 
             val rejoinMsg = "Mr $empName at $branchName Branch as $designationVal rejained confirmed"
             val (msgOk, msgResp) = executeTursoHttpSql(
@@ -656,7 +694,7 @@ fun Route.commentsQueueRoute() {
             var separater = ""
             var jsonDetails = ""
 
-            val selectPs = conn.prepareStatement("SELECT separater, jsondetails FROM Comments WHERE id = ?")
+            val selectPs = conn.prepareStatement("SELECT separater, jsondetails FROM Comments WHERE COALESCE(id, rowid) = ?")
             selectPs.setString(1, commentId)
             val rs = selectPs.executeQuery()
             if (rs.next()) {
@@ -691,7 +729,7 @@ fun Route.commentsQueueRoute() {
             }
             conn.close()
 
-            executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE id = ?", listOf(commentId))
+            executeTursoHttpSql("UPDATE Comments SET separater = 'CONF' WHERE COALESCE(id, rowid) = ?", listOf(commentId))
 
             // Refresh reports table in background
             triggerReportMeServiceAsync()
@@ -708,7 +746,7 @@ fun Route.commentsQueueRoute() {
         val commentId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
 
-        val (ok, resp) = executeTursoHttpSql("UPDATE Comments SET separater = 'REJ' WHERE id = ?", listOf(commentId))
+        val (ok, resp) = executeTursoHttpSql("UPDATE Comments SET separater = 'REJ' WHERE COALESCE(id, rowid) = ?", listOf(commentId))
         if (ok) {
             call.respond(HttpStatusCode.OK, mapOf("status" to "rejected", "message" to "Rejected"))
         } else {
